@@ -1,0 +1,12 @@
+{
+  "name": "AIボイスメモ v1.1",
+  "short_name": "ボイスメモ",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "lang": "ja",
+  "icons": [
+    { "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%23e53e3e'/><text y='130' x='50' font-size='100'>🎙</text></svg>", "sizes": "192x192", "type": "image/svg+xml" }
+  ]
+}

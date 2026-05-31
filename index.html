@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="manifest" href="manifest.json">
+<title>AIボイスメモ</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0a;--surface:#1a1a1a;--surface2:#242424;
+  --border:#2a2a2a;--text:#f0f0f0;--sub:#888;
+  --red:#e53e3e;--red-dim:#7f1d1d;--blue:#3b82f6;
+  --green:#22c55e;--yellow:#fbbf24;--purple:#a78bfa;
+  --r:12px;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif;
+  min-height:100dvh;display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top);
+  padding-bottom:env(safe-area-inset-bottom)}
+
+/* ── スクリーン ── */
+.screen{display:none;flex-direction:column;flex:1;overflow:hidden}
+.screen.active{display:flex}
+
+/* ── ヘッダー共通 ── */
+.hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:20px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.hdr h1{font-size:20px;font-weight:700}
+.hdr-sub{font-size:16px;color:var(--sub)}
+
+/* ── ボタン共通 ── */
+button{border:none;border-radius:var(--r);font-size:16px;font-weight:600;
+  cursor:pointer;transition:opacity .15s,transform .1s;
+  -webkit-tap-highlight-color:transparent}
+button:active{transform:scale(.96);opacity:.8}
+button:disabled{opacity:.3;cursor:default;transform:none}
+
+/* ════════════════════════════════
+   画面1：セットアップ
+════════════════════════════════ */
+#setup-body{flex:1;overflow-y:auto;padding:20px}
+#setup-body h2{font-size:16px;color:var(--sub);margin-bottom:12px}
+
+.name-row{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.name-input{flex:1;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);color:var(--text);font-size:16px;padding:12px 14px}
+.name-input::placeholder{color:var(--sub)}
+.name-input:focus{outline:none;border-color:var(--blue)}
+.btn-del-name{width:40px;height:40px;background:var(--surface);
+  color:var(--sub);border:1px solid var(--border);font-size:20px}
+
+#btn-add-name{width:100%;padding:12px;background:var(--surface);
+  color:var(--blue);border:1px solid var(--blue);margin-top:4px}
+
+#setup-footer{padding:16px 20px 20px;border-top:1px solid var(--border);flex-shrink:0}
+#btn-start-rec{width:100%;padding:18px;background:var(--red);
+  color:#fff;font-size:20px}
+
+/* ════════════════════════════════
+   画面2：録音
+════════════════════════════════ */
+#rec-transcript{flex:1;overflow-y:auto;padding:16px 20px;display:flex;
+  flex-direction:column;gap:8px}
+
+.seg{font-size:16px;line-height:1.6;padding:10px 12px;
+  background:var(--surface);border-radius:10px;
+  border-left:3px solid var(--border)}
+.seg.interim{color:var(--sub);background:transparent;border-left-color:transparent}
+.seg.highlight{border-left-color:var(--yellow)}
+.speaker-badge{display:inline-block;padding:2px 8px;border-radius:20px;
+  font-size:12px;font-weight:700;margin-right:6px;color:#fff}
+
+.placeholder{color:var(--sub);font-size:16px;text-align:center;margin-top:40px}
+
+#rec-controls{padding:12px 20px 20px;border-top:1px solid var(--border);
+  display:flex;flex-direction:column;gap:10px;flex-shrink:0}
+
+/* レベルバー */
+#level-bar{height:4px;background:var(--border);border-radius:2px;
+  overflow:hidden;visibility:hidden}
+#level-bar.active{visibility:visible}
+#level-fill{height:100%;width:0%;background:var(--red);
+  border-radius:2px;transition:width .1s}
+
+/* 話者ボタン群 */
+#speaker-btns{display:flex;flex-wrap:wrap;gap:8px}
+.btn-speaker{padding:8px 16px;background:var(--surface);
+  color:var(--text);border:1px solid var(--border);font-size:16px}
+.btn-speaker.active{color:#fff;border-color:transparent}
+
+.rec-row{display:flex;gap:8px}
+#btn-stop-rec{flex:1;padding:16px;background:var(--red-dim);color:#fff;font-size:20px}
+#btn-hl{width:56px;height:56px;background:var(--surface);
+  color:var(--yellow);border:1px solid var(--border);font-size:24px}
+#rec-timer{font-size:16px;font-variant-numeric:tabular-nums;
+  color:var(--red);text-align:center}
+
+/* ════════════════════════════════
+   画面3：結果
+════════════════════════════════ */
+#result-body{flex:1;overflow-y:auto;padding:16px 20px;
+  display:flex;flex-direction:column;gap:16px}
+
+/* 音声プレイヤー */
+#audio-player-wrap{background:var(--surface);border-radius:var(--r);padding:14px}
+#audio-player-wrap p{font-size:14px;color:var(--sub);margin-bottom:8px}
+audio{width:100%;height:40px}
+
+/* セグメント一覧 */
+#result-segments{display:flex;flex-direction:column;gap:8px}
+.rseg{background:var(--surface);border-radius:10px;padding:10px 12px;
+  border-left:3px solid var(--border);display:flex;flex-direction:column;gap:6px}
+.rseg.highlight{border-left-color:var(--yellow)}
+.rseg-top{display:flex;align-items:center;gap:8px}
+.rseg-select{background:var(--surface2);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:14px;padding:4px 8px;
+  -webkit-appearance:none}
+.rseg-ts{font-size:12px;color:var(--sub)}
+.rseg-text{font-size:16px;line-height:1.6}
+
+/* 過去録音 */
+#history-section h2{font-size:16px;color:var(--sub);margin-bottom:8px}
+.hist-item{background:var(--surface);border-radius:var(--r);padding:12px 14px;
+  display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.hist-info{flex:1}
+.hist-title{font-size:16px;font-weight:600}
+.hist-meta{font-size:13px;color:var(--sub);margin-top:2px}
+.btn-hist-load{padding:8px 12px;background:var(--blue);color:#fff;font-size:14px}
+.btn-hist-del{padding:8px 12px;background:var(--surface2);
+  color:var(--sub);border:1px solid var(--border);font-size:14px}
+
+#result-footer{padding:12px 20px 20px;border-top:1px solid var(--border);
+  display:flex;flex-direction:column;gap:8px;flex-shrink:0}
+.result-row{display:flex;gap:8px}
+#btn-copy-result{flex:1;padding:14px;background:var(--surface);
+  color:var(--text);border:1px solid var(--border)}
+#btn-save{flex:1;padding:14px;background:var(--green);color:#fff}
+#btn-new-rec{width:100%;padding:14px;background:var(--surface);
+  color:var(--sub);border:1px solid var(--border)}
+
+/* ── トースト ── */
+#toast{position:fixed;bottom:110px;left:50%;
+  transform:translateX(-50%) translateY(20px);
+  background:#333;color:#fff;padding:10px 20px;border-radius:20px;
+  font-size:14px;opacity:0;transition:opacity .3s,transform .3s;
+  pointer-events:none;white-space:nowrap;z-index:99}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- ════ 画面1：セットアップ ════ -->
+<div id="screen-setup" class="screen active">
+  <div class="hdr"><h1>AIボイスメモ</h1><span class="hdr-sub">v1.1</span></div>
+  <div id="setup-body">
+    <h2>参加者名を入力（省略可）</h2>
+    <div id="name-list"></div>
+    <button id="btn-add-name">＋ 参加者を追加</button>
+  </div>
+  <div id="setup-footer">
+    <button id="btn-start-rec">録音開始</button>
+  </div>
+</div>
+
+<!-- ════ 画面2：録音 ════ -->
+<div id="screen-rec" class="screen">
+  <div class="hdr">
+    <h1>録音中</h1>
+    <span id="rec-timer">00:00</span>
+  </div>
+  <div id="rec-transcript">
+    <p class="placeholder" id="rec-placeholder">話し始めると文字起こしが表示されます</p>
+  </div>
+  <div id="rec-controls">
+    <div id="level-bar"><div id="level-fill"></div></div>
+    <div id="speaker-btns"></div>
+    <div class="rec-row">
+      <button id="btn-stop-rec">録音停止</button>
+      <button id="btn-hl" title="ハイライト">★</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════ 画面3：結果 ════ -->
+<div id="screen-result" class="screen">
+  <div class="hdr">
+    <h1>録音結果</h1>
+    <span class="hdr-sub" id="result-duration"></span>
+  </div>
+  <div id="result-body">
+    <div id="audio-player-wrap">
+      <p>録音を聴き直す</p>
+      <audio id="audio-player" controls></audio>
+    </div>
+    <div id="result-segments"></div>
+    <div id="history-section">
+      <h2>過去の録音</h2>
+      <div id="history-list"></div>
+    </div>
+  </div>
+  <div id="result-footer">
+    <div class="result-row">
+      <button id="btn-copy-result">テキストをコピー</button>
+      <button id="btn-save">IndexedDBに保存</button>
+    </div>
+    <button id="btn-new-rec">新しい録音</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════
+// 定数・色パレット
+// ══════════════════════════════════════
+const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
+const DB_NAME = 'VoiceMemo', DB_VER = 1, STORE = 'recordings';
+
+// ══════════════════════════════════════
+// 状態
+// ══════════════════════════════════════
+const state = {
+  participants: [],      // ['佐藤','鈴木', ...]
+  currentSpeaker: null,  // 現在の話者インデックス
+  segments: [],          // {text, speakerIdx, ts, highlight, isInterim}
+  audioBlob: null,
+  audioUrl: null,
+  startTime: null,
+  timerInterval: null,
+  restartTimer: null,
+  isRecording: false,
+  nextHighlight: false,
+  mediaRecorder: null,
+  audioChunks: [],
+  stt: null,
+  currentSession: null,  // 結果画面で操作中のセッション
+};
+
+// ══════════════════════════════════════
+// DOM
+// ══════════════════════════════════════
+const $screens = {
+  setup:  document.getElementById('screen-setup'),
+  rec:    document.getElementById('screen-rec'),
+  result: document.getElementById('screen-result'),
+};
+const $ = id => document.getElementById(id);
+
+// ══════════════════════════════════════
+// 画面切替
+// ══════════════════════════════════════
+function showScreen(name) {
+  Object.entries($screens).forEach(([k,el]) =>
+    el.classList.toggle('active', k === name));
+}
+
+// ══════════════════════════════════════
+// トースト
+// ══════════════════════════════════════
+function toast(msg, duration = 2000) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), duration);
+}
+
+// ══════════════════════════════════════
+// 話者カラー
+// ══════════════════════════════════════
+function speakerColor(idx) {
+  return idx == null ? '#555' : (SPEAKER_COLORS[idx % SPEAKER_COLORS.length]);
+}
+function speakerLabel(idx) {
+  if (idx == null) return '';
+  return state.participants[idx] || `話者${idx+1}`;
+}
+
+// ══════════════════════════════════════
+// 画面1：セットアップ
+// ══════════════════════════════════════
+function renderNameList() {
+  const list = $('name-list');
+  list.innerHTML = '';
+  state.participants.forEach((name, i) => {
+    const row = document.createElement('div');
+    row.className = 'name-row';
+    const inp = document.createElement('input');
+    inp.className = 'name-input';
+    inp.type = 'text';
+    inp.value = name;
+    inp.placeholder = `参加者 ${i+1}`;
+    inp.addEventListener('input', e => { state.participants[i] = e.target.value.trim(); });
+    const del = document.createElement('button');
+    del.className = 'btn-del-name';
+    del.textContent = '×';
+    del.addEventListener('click', () => {
+      state.participants.splice(i, 1);
+      renderNameList();
+    });
+    row.appendChild(inp); row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
+$('btn-add-name').addEventListener('click', () => {
+  if (state.participants.length >= 5) { toast('最大5人まで'); return; }
+  state.participants.push('');
+  renderNameList();
+});
+
+$('btn-start-rec').addEventListener('click', () => {
+  // 空文字除去
+  state.participants = state.participants.filter(n => n.trim() !== '');
+  state.currentSpeaker = state.participants.length > 0 ? 0 : null;
+  startRecording();
+});
+
+// ══════════════════════════════════════
+// STT プロバイダー（差し替えポイント）
+// ══════════════════════════════════════
+function createSTT() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = 'ja-JP';
+  r.continuous = true;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+  const api = {
+    onResult: null, onEnd: null, onError: null,
+    start() { r.start(); },
+    stop()  { r.stop(); },
+  };
+  r.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) api.onResult?.({text: t, isFinal: true});
+      else interim += t;
+    }
+    if (interim) api.onResult?.({text: interim, isFinal: false});
+  };
+  r.onend  = () => api.onEnd?.();
+  r.onerror = e => api.onError?.(e.error);
+  return api;
+}
+
+// ══════════════════════════════════════
+// 録音開始
+// ══════════════════════════════════════
+async function startRecording() {
+  // マイク取得
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch(e) {
+    toast('マイクの使用を許可してください'); return;
+  }
+
+  // MediaRecorder（音声保存用）
+  state.audioChunks = [];
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : 'audio/webm';
+  const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
+  mr.ondataavailable = e => { if (e.data.size > 0) state.audioChunks.push(e.data); };
+  mr.start(1000);
+  state.mediaRecorder = mr;
+
+  // STT
+  const stt = createSTT();
+  if (!stt) { toast('このブラウザは音声認識非対応'); return; }
+  stt.onResult = ({text, isFinal}) => {
+    if (isFinal) {
+      // interim を確定セグメントに変換
+      const interimIdx = state.segments.findIndex(s => s.isInterim);
+      if (interimIdx >= 0) {
+        state.segments[interimIdx] = {
+          text: text.trim(),
+          speakerIdx: state.segments[interimIdx].speakerIdx ?? state.currentSpeaker,
+          ts: state.segments[interimIdx].ts,
+          highlight: state.segments[interimIdx].highlight || state.nextHighlight,
+          isInterim: false,
+        };
+        state.nextHighlight = false;
+      } else if (text.trim()) {
+        state.segments.push({
+          text: text.trim(),
+          speakerIdx: state.currentSpeaker,
+          ts: getElapsed(),
+          highlight: state.nextHighlight,
+          isInterim: false,
+        });
+        state.nextHighlight = false;
+      }
+      renderRecTranscript();
+    } else {
+      // interim: 既存を更新 or 追加
+      const interimIdx = state.segments.findIndex(s => s.isInterim);
+      if (interimIdx >= 0) {
+        state.segments[interimIdx].text = text;
+        // 話者ボタン押下時のリアルタイム反映
+        state.segments[interimIdx].speakerIdx = state.currentSpeaker;
+      } else {
+        state.segments.push({
+          text, speakerIdx: state.currentSpeaker,
+          ts: getElapsed(), highlight: false, isInterim: true,
+        });
+      }
+      renderRecTranscript();
+    }
+  };
+  stt.onEnd = () => {
+    if (state.isRecording) {
+      state.restartTimer = setTimeout(() => { try { stt.start(); } catch(e){} }, 300);
+    }
+  };
+  stt.onError = err => {
+    if (err === 'no-speech') return;
+    if (err === 'not-allowed') { toast('マイク許可が必要です'); stopRecording(); }
+  };
+  stt.start();
+  state.stt = stt;
+
+  // 状態更新
+  state.isRecording = true;
+  state.segments = [];
+  state.startTime = Date.now();
+  state.timerInterval = setInterval(updateTimer, 1000);
+
+  // レベルバー
+  $('level-bar').classList.add('active');
+  animateLevel();
+
+  // 話者ボタン描画
+  renderSpeakerBtns();
+
+  showScreen('rec');
+}
+
+// ══════════════════════════════════════
+// 録音停止
+// ══════════════════════════════════════
+function stopRecording() {
+  state.isRecording = false;
+  clearInterval(state.timerInterval);
+  clearTimeout(state.restartTimer);
+  $('level-bar').classList.remove('active');
+  $('level-fill').style.width = '0%';
+
+  try { state.stt?.stop(); } catch(e) {}
+
+  state.mediaRecorder.onstop = () => {
+    const mime = state.mediaRecorder.mimeType || 'audio/webm';
+    state.audioBlob = new Blob(state.audioChunks, {type: mime});
+    state.audioUrl = URL.createObjectURL(state.audioBlob);
+    buildResultScreen();
+  };
+  state.mediaRecorder.stop();
+  state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
+}
+
+$('btn-stop-rec').addEventListener('click', stopRecording);
+
+// ══════════════════════════════════════
+// 話者ボタン
+// ══════════════════════════════════════
+function renderSpeakerBtns() {
+  const wrap = $('speaker-btns');
+  wrap.innerHTML = '';
+  if (state.participants.length === 0) return;
+  state.participants.forEach((name, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn-speaker' + (i === state.currentSpeaker ? ' active' : '');
+    btn.textContent = name || `話者${i+1}`;
+    btn.style.borderColor = i === state.currentSpeaker ? speakerColor(i) : '';
+    btn.style.backgroundColor = i === state.currentSpeaker ? speakerColor(i) : '';
+    btn.addEventListener('click', () => {
+      state.currentSpeaker = i;
+      // 現在のinterimセグメントに即時反映
+      const interim = state.segments.find(s => s.isInterim);
+      if (interim) interim.speakerIdx = i;
+      renderSpeakerBtns();
+      renderRecTranscript();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+// ══════════════════════════════════════
+// 録音画面：文字起こし描画
+// ══════════════════════════════════════
+function renderRecTranscript() {
+  const area = $('rec-transcript');
+  area.innerHTML = '';
+  if (state.segments.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'placeholder';
+    p.id = 'rec-placeholder';
+    p.textContent = '話し始めると文字起こしが表示されます';
+    area.appendChild(p);
+    return;
+  }
+  state.segments.forEach(seg => {
+    const div = document.createElement('div');
+    div.className = 'seg' + (seg.isInterim ? ' interim' : '') + (seg.highlight ? ' highlight' : '');
+    if (seg.speakerIdx != null && !seg.isInterim) {
+      const badge = document.createElement('span');
+      badge.className = 'speaker-badge';
+      badge.style.backgroundColor = speakerColor(seg.speakerIdx);
+      badge.textContent = speakerLabel(seg.speakerIdx);
+      div.appendChild(badge);
+    } else if (seg.speakerIdx != null && seg.isInterim) {
+      // interim中も話者色でテキスト表示
+      div.style.color = speakerColor(seg.speakerIdx);
+    }
+    div.appendChild(document.createTextNode(seg.text));
+    area.appendChild(div);
+  });
+  area.scrollTop = area.scrollHeight;
+}
+
+// ══════════════════════════════════════
+// ハイライト
+// ══════════════════════════════════════
+$('btn-hl').addEventListener('click', () => {
+  state.nextHighlight = true;
+  const interim = state.segments.find(s => s.isInterim);
+  if (interim) interim.highlight = true;
+  toast('次のセグメントにハイライト ★');
+});
+
+// ══════════════════════════════════════
+// タイマー・レベル
+// ══════════════════════════════════════
+function getElapsed() {
+  const sec = Math.floor((Date.now() - state.startTime) / 1000);
+  return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+}
+function updateTimer() {
+  $('rec-timer').textContent = getElapsed();
+}
+function animateLevel() {
+  if (!state.isRecording) return;
+  $('level-fill').style.width = (20 + Math.random() * 60) + '%';
+  setTimeout(animateLevel, 150);
+}
+
+// ══════════════════════════════════════
+// 画面3：結果画面構築
+// ══════════════════════════════════════
+function buildResultScreen() {
+  // 名乗り後処理（全セグメント対象）
+  applyNameDeclaration();
+
+  // セグメント冒頭に話者名補正
+  finalizeSegments();
+
+  // 録音時間
+  const dur = getElapsed();
+  $('result-duration').textContent = dur;
+
+  // 音声プレイヤー
+  $('audio-player').src = state.audioUrl;
+
+  // セグメント描画
+  renderResultSegments();
+
+  // 履歴読込
+  loadHistory();
+
+  showScreen('result');
+}
+
+// ══════════════════════════════════════
+// 名乗り検出・変換
+// ══════════════════════════════════════
+function applyNameDeclaration() {
+  if (state.participants.length === 0) return;
+  state.segments.forEach(seg => {
+    if (seg.isInterim) return;
+    for (let i = 0; i < state.participants.length; i++) {
+      const name = state.participants[i];
+      if (!name) continue;
+      // 「〇〇です」「〇〇ですが」「〇〇ですね」などを検出
+      const re = new RegExp(name + 'です', 'g');
+      if (re.test(seg.text)) {
+        // 話者を自動設定（既に話者設定済みでなければ）
+        if (seg.speakerIdx == null) seg.speakerIdx = i;
+        // テキスト内の「〇〇です」を「[〇〇] です」に変換
+        seg.text = seg.text.replace(
+          new RegExp(name + '(です[^。、]*)', 'g'),
+          `[${name}] $1`
+        );
+        break;
+      }
+    }
+  });
+}
+
+// ══════════════════════════════════════
+// セグメント冒頭の話者名補正
+// ══════════════════════════════════════
+function finalizeSegments() {
+  // interimを確定扱いに
+  state.segments = state.segments.filter(s => !s.isInterim || s.text.trim());
+  state.segments.forEach(s => { s.isInterim = false; });
+}
+
+// ══════════════════════════════════════
+// 結果画面：セグメント描画
+// ══════════════════════════════════════
+function renderResultSegments() {
+  const wrap = $('result-segments');
+  wrap.innerHTML = '';
+
+  // プルダウン選択肢
+  const opts = ['（未設定）', ...state.participants.map((n,i) => n || `話者${i+1}`)];
+
+  state.segments.forEach((seg, si) => {
+    const div = document.createElement('div');
+    div.className = 'rseg' + (seg.highlight ? ' highlight' : '');
+    div.style.borderLeftColor = speakerColor(seg.speakerIdx);
+
+    // 上段：話者プルダウン＋タイムスタンプ
+    const top = document.createElement('div');
+    top.className = 'rseg-top';
+
+    const sel = document.createElement('select');
+    sel.className = 'rseg-select';
+    opts.forEach((opt, oi) => {
+      const o = document.createElement('option');
+      o.value = oi === 0 ? '' : String(oi - 1);
+      o.textContent = opt;
+      if ((oi === 0 && seg.speakerIdx == null) ||
+          (oi > 0 && seg.speakerIdx === oi - 1)) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', e => {
+      seg.speakerIdx = e.target.value === '' ? null : Number(e.target.value);
+      div.style.borderLeftColor = speakerColor(seg.speakerIdx);
+    });
+
+    const ts = document.createElement('span');
+    ts.className = 'rseg-ts';
+    ts.textContent = seg.ts + (seg.highlight ? ' ★' : '');
+
+    top.appendChild(sel); top.appendChild(ts);
+
+    // テキスト
+    const txt = document.createElement('div');
+    txt.className = 'rseg-text';
+    txt.textContent = seg.text;
+    txt.contentEditable = 'true';
+    txt.addEventListener('input', () => { seg.text = txt.textContent; });
+
+    div.appendChild(top); div.appendChild(txt);
+    wrap.appendChild(div);
+  });
+}
+
+// ══════════════════════════════════════
+// テキストコピー
+// ══════════════════════════════════════
+$('btn-copy-result').addEventListener('click', () => {
+  const lines = state.segments.map(s => {
+    const label = s.speakerIdx != null ? `[${speakerLabel(s.speakerIdx)}] ` : '';
+    return `${s.ts} ${label}${s.text}`;
+  }).join('\n');
+  navigator.clipboard.writeText(lines)
+    .then(() => toast('コピーしました'))
+    .catch(() => toast('コピー失敗'));
+});
+
+// ══════════════════════════════════════
+// IndexedDB
+// ══════════════════════════════════════
+function openDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, {keyPath: 'id', autoIncrement: true});
+      }
+    };
+    req.onsuccess = e => res(e.target.result);
+    req.onerror   = () => rej(req.error);
+  });
+}
+
+async function saveToIDB() {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+
+    // 音声をArrayBufferに変換
+    const arrayBuf = await state.audioBlob.arrayBuffer();
+
+    const record = {
+      createdAt: new Date().toISOString(),
+      duration: getElapsed(),
+      participants: [...state.participants],
+      segments: state.segments.map(s => ({...s})),
+      audioMime: state.audioBlob.type,
+      audioData: arrayBuf,
+    };
+    store.add(record);
+    await new Promise((res,rej) => { tx.oncomplete=res; tx.onerror=rej; });
+    toast('IndexedDBに保存しました');
+    loadHistory();
+  } catch(e) {
+    toast('保存に失敗しました');
+    console.error(e);
+  }
+}
+
+async function loadHistory() {
+  const list = $('history-list');
+  list.innerHTML = '';
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE, 'readonly');
+    const store = tx.objectStore(STORE);
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const records = req.result.reverse();
+      if (records.length === 0) {
+        list.innerHTML = '<p style="color:var(--sub);font-size:14px">保存された録音はありません</p>';
+        return;
+      }
+      records.forEach(rec => {
+        const item = document.createElement('div');
+        item.className = 'hist-item';
+        const info = document.createElement('div');
+        info.className = 'hist-info';
+        const title = document.createElement('div');
+        title.className = 'hist-title';
+        title.textContent = new Date(rec.createdAt).toLocaleString('ja-JP');
+        const meta = document.createElement('div');
+        meta.className = 'hist-meta';
+        meta.textContent = `${rec.duration} / ${rec.participants.join('・') || '参加者なし'}`;
+        info.appendChild(title); info.appendChild(meta);
+
+        const btnLoad = document.createElement('button');
+        btnLoad.className = 'btn-hist-load';
+        btnLoad.textContent = '開く';
+        btnLoad.addEventListener('click', () => loadRecord(rec));
+
+        const btnDel = document.createElement('button');
+        btnDel.className = 'btn-hist-del';
+        btnDel.textContent = '削除';
+        btnDel.addEventListener('click', () => deleteRecord(rec.id));
+
+        item.appendChild(info); item.appendChild(btnLoad); item.appendChild(btnDel);
+        list.appendChild(item);
+      });
+    };
+  } catch(e) { list.innerHTML = '<p style="color:var(--sub)">履歴の読み込みに失敗</p>'; }
+}
+
+async function deleteRecord(id) {
+  const db = await openDB();
+  const tx = db.transaction(STORE, 'readwrite');
+  tx.objectStore(STORE).delete(id);
+  await new Promise((res,rej) => { tx.oncomplete=res; tx.onerror=rej; });
+  toast('削除しました');
+  loadHistory();
+}
+
+function loadRecord(rec) {
+  // 保存済み録音を結果画面に展開
+  state.participants = rec.participants;
+  state.segments = rec.segments;
+  const blob = new Blob([rec.audioData], {type: rec.audioMime});
+  state.audioBlob = blob;
+  state.audioUrl = URL.createObjectURL(blob);
+  $('audio-player').src = state.audioUrl;
+  $('result-duration').textContent = rec.duration;
+  renderResultSegments();
+  toast('録音を読み込みました');
+  $('result-body').scrollTop = 0;
+}
+
+$('btn-save').addEventListener('click', saveToIDB);
+
+// ══════════════════════════════════════
+// 新しい録音
+// ══════════════════════════════════════
+$('btn-new-rec').addEventListener('click', () => {
+  state.segments = [];
+  state.audioBlob = null;
+  if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
+  state.currentSpeaker = null;
+  $('rec-timer').textContent = '00:00';
+  renderNameList();
+  showScreen('setup');
+});
+
+// ══════════════════════════════════════
+// 初期化
+// ══════════════════════════════════════
+function init() {
+  // 最初の参加者欄を1つ用意
+  state.participants = [''];
+  renderNameList();
+
+  // PWA登録
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+}
+
+init();
+</script>
+</body>
+</html>
