@@ -141,6 +141,10 @@ audio{width:100%;height:40px}
 #btn-save{flex:1;padding:14px;background:var(--green);color:#fff}
 #btn-new-rec{width:100%;padding:14px;background:var(--surface);
   color:var(--sub);border:1px solid var(--border)}
+#btn-upload{flex:1;padding:14px;background:#0ea5e9;color:#fff}
+#btn-upload:disabled{opacity:.4}
+#btn-clear-project{flex:1;padding:14px;background:var(--surface2);
+  color:var(--sub);border:1px solid var(--border)}
 
 /* ── トースト ── */
 #toast{position:fixed;bottom:110px;left:50%;
@@ -231,6 +235,10 @@ audio{width:100%;height:40px}
       <button id="btn-copy-result">テキストをコピー</button>
       <button id="btn-save">IndexedDBに保存</button>
     </div>
+    <div class="result-row">
+      <button id="btn-upload">VPSへアップロード</button>
+      <button id="btn-clear-project">クリア（新MTG）</button>
+    </div>
     <button id="btn-new-rec">新しい録音</button>
   </div>
 </div>
@@ -253,6 +261,7 @@ const state = {
   segments: [],          // {text, speakerIdx, ts, highlight, isInterim}
   audioBlob: null,
   audioUrl: null,
+  allAudioBlobs: [],     // 停止/再開ごとのBlobを蓄積（プロジェクト単位）
   startTime: null,
   timerInterval: null,
   restartTimer: null,
@@ -480,6 +489,7 @@ function stopRecording() {
   state.mediaRecorder.onstop = () => {
     const mime = state.mediaRecorder.mimeType || 'audio/webm';
     state.audioBlob = new Blob(state.audioChunks, {type: mime});
+    state.allAudioBlobs.push({blob: state.audioBlob, mime});
     state.audioUrl = URL.createObjectURL(state.audioBlob);
     buildResultScreen();
   };
@@ -814,11 +824,77 @@ function loadRecord(rec) {
 $('btn-save').addEventListener('click', saveToIDB);
 
 // ══════════════════════════════════════
+// VPSへアップロード
+// ══════════════════════════════════════
+const API_BASE = 'https://jizo-dev.com';
+
+async function uploadProject() {
+  if (state.allAudioBlobs.length === 0) {
+    toast('録音データがありません');
+    return;
+  }
+  const btn = $('btn-upload');
+  btn.disabled = true;
+  btn.textContent = 'アップロード中…';
+
+  try {
+    const fd = new FormData();
+    const meta = {
+      name: new Date().toLocaleString('ja-JP'),
+      participants: [...state.participants],
+      segments: state.segments
+        .filter(s => !s.isInterim)
+        .map(s => ({
+          text: s.text,
+          speakerIdx: s.speakerIdx,
+          ts: s.ts,
+          highlight: s.highlight,
+        })),
+    };
+    fd.append('meta', JSON.stringify(meta));
+    state.allAudioBlobs.forEach(({blob, mime}, i) => {
+      fd.append('audio', blob, `rec_${i}.webm`);
+    });
+
+    const res = await fetch(`${API_BASE}/api/projects`, {method: 'POST', body: fd});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    toast(`アップロード完了（${state.allAudioBlobs.length}件の録音）`, 3000);
+    console.log('project_id:', data.project_id);
+  } catch(e) {
+    toast('アップロード失敗: ' + e.message, 3000);
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'VPSへアップロード';
+  }
+}
+
+$('btn-upload').addEventListener('click', uploadProject);
+
+// ══════════════════════════════════════
+// クリア（新MTGとしてリセット）
+// ══════════════════════════════════════
+$('btn-clear-project').addEventListener('click', () => {
+  if (!confirm('このMTGのデータをクリアして新しいMTGを開始しますか？\n（録音・文字起こしはすべてリセットされます）')) return;
+  state.segments = [];
+  state.audioBlob = null;
+  state.allAudioBlobs = [];
+  if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
+  state.currentSpeaker = null;
+  $('rec-timer').textContent = '00:00';
+  renderNameList();
+  showScreen('setup');
+  toast('新しいMTGを開始します');
+});
+
+// ══════════════════════════════════════
 // 新しい録音
 // ══════════════════════════════════════
 $('btn-new-rec').addEventListener('click', () => {
   state.segments = [];
   state.audioBlob = null;
+  state.allAudioBlobs = [];
   if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
   state.currentSpeaker = null;
   $('rec-timer').textContent = '00:00';
