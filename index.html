@@ -149,9 +149,33 @@ audio{width:100%;height:40px}
   font-size:14px;opacity:0;transition:opacity .3s,transform .3s;
   pointer-events:none;white-space:nowrap;z-index:99}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── ブラウザ警告オーバーレイ ── */
+#browser-warn{
+  display:none;position:fixed;inset:0;z-index:999;
+  background:#0a0a0a;
+  flex-direction:column;align-items:center;justify-content:center;
+  padding:32px 24px;text-align:center;gap:20px}
+#browser-warn.show{display:flex}
+#browser-warn .warn-icon{font-size:48px}
+#browser-warn h2{font-size:24px;font-weight:700;color:#f0f0f0}
+#browser-warn p{font-size:16px;color:#888;line-height:1.6;max-width:320px}
+#browser-warn .warn-step{
+  background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;
+  padding:16px 20px;font-size:16px;color:#f0f0f0;
+  line-height:1.7;text-align:left;width:100%;max-width:320px}
+#browser-warn .warn-step strong{color:#3b82f6}
 </style>
 </head>
 <body>
+
+<!-- ════ ブラウザ警告 ════ -->
+<div id="browser-warn">
+  <div class="warn-icon">⚠️</div>
+  <h2 id="warn-title">対応ブラウザで開いてください</h2>
+  <p id="warn-desc"></p>
+  <div class="warn-step" id="warn-step"></div>
+</div>
 
 <!-- ════ 画面1：セットアップ ════ -->
 <div id="screen-setup" class="screen active">
@@ -803,6 +827,36 @@ $('btn-new-rec').addEventListener('click', () => {
 });
 
 // ══════════════════════════════════════
+// ブラウザ互換チェック
+// ══════════════════════════════════════
+function checkBrowser() {
+  const ua = navigator.userAgent;
+  const isIOS = /iPhone|iPad|iPod/.test(ua);
+  const isAndroid = /Android/.test(ua);
+  const isSafari = /Safari/.test(ua) && !/Chrome|CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  const isChrome = /Chrome|CriOS/.test(ua);
+
+  let title = '', desc = '', step = '';
+
+  if (isIOS && !isSafari) {
+    title = 'Safariで開いてください';
+    desc = 'このアプリはマイク・文字起こし機能のため、iOSではSafariが必要です。';
+    step = '① このURLをコピー<br>② Safariを起動して貼り付け<br>③ ホーム画面に追加すると次回からすぐ使えます';
+  } else if (isAndroid && !isChrome) {
+    title = 'Chrome で開いてください';
+    desc = 'このアプリはAndroidではGoogle Chromeが必要です。';
+    step = '① このURLをコピー<br>② Chromeを起動して貼り付け';
+  }
+
+  if (title) {
+    document.getElementById('warn-title').textContent = title;
+    document.getElementById('warn-desc').textContent = desc;
+    document.getElementById('warn-step').innerHTML = step;
+    document.getElementById('browser-warn').classList.add('show');
+  }
+}
+
+// ══════════════════════════════════════
 // 初期化
 // ══════════════════════════════════════
 function init() {
@@ -816,6 +870,7 @@ function init() {
   }
 }
 
+checkBrowser();
 init();
 </script>
 </body>
