@@ -694,23 +694,24 @@ function openDB() {
 
 async function saveToIDB() {
   try {
-    const db = await openDB();
-    const tx = db.transaction(STORE, 'readwrite');
-    const store = tx.objectStore(STORE);
-
-    // 音声をArrayBufferに変換
+    // awaitはトランザクション開始前に全て済ませる
     const arrayBuf = await state.audioBlob.arrayBuffer();
+    const db = await openDB();
 
     const record = {
       createdAt: new Date().toISOString(),
-      duration: getElapsed(),
+      duration: $('result-duration').textContent,
       participants: [...state.participants],
       segments: state.segments.map(s => ({...s})),
       audioMime: state.audioBlob.type,
       audioData: arrayBuf,
     };
-    store.add(record);
-    await new Promise((res,rej) => { tx.oncomplete=res; tx.onerror=rej; });
+
+    // トランザクション開始後はawaitを挟まない
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).add(record);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+
     toast('IndexedDBに保存しました');
     loadHistory();
   } catch(e) {
