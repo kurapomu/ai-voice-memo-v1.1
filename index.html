@@ -222,6 +222,11 @@ audio{width:100%;height:40px}
     </div>
   </div>
   <div id="setup-body">
+    <h2 style="margin-bottom:8px">MTG名（省略可）</h2>
+    <input id="mtg-name-input" type="text" placeholder="例：週次定例 / 省略すると「MTG 2026-05-31」"
+      style="width:100%;background:var(--surface);border:1px solid var(--border);
+        border-radius:var(--r);color:var(--text);font-size:16px;padding:12px 14px;
+        margin-bottom:16px;box-sizing:border-box">
     <h2>参加者名を入力（省略可）</h2>
     <div id="name-list"></div>
     <button id="btn-add-name">＋ 参加者を追加</button>
@@ -877,7 +882,8 @@ async function uploadProject() {
   try {
     const fd = new FormData();
     const meta = {
-      name: new Date().toLocaleString('ja-JP'),
+      name: ($('mtg-name-input').value.trim()) ||
+            ('MTG ' + new Date().toLocaleDateString('ja-JP', {year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'-')),
       participants: [...state.participants],
       segments: state.segments
         .filter(s => !s.isInterim)
@@ -920,6 +926,7 @@ $('btn-clear-project').addEventListener('click', () => {
   if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
   state.currentSpeaker = null;
   $('rec-timer').textContent = '00:00';
+  $('mtg-name-input').value = '';
   renderNameList();
   showScreen('setup');
   toast('新しいMTGを開始します');
