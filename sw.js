@@ -1,4 +1,4 @@
-const CACHE = 'voicememo-v1.1';
+const CACHE = 'voicememo-v1.2';
 const ASSETS = ['./', './index.html', './manifest.json'];
 self.addEventListener('install', e =>
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)))
