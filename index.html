@@ -234,7 +234,6 @@ audio{width:100%;height:40px}
   <div class="hdr">
     <h1>AIボイスメモ</h1>
     <div class="hdr-actions">
-      <a href="/ai-voice-memo/admin/" class="hdr-admin-link">管理画面</a>
       <button class="hdr-icon-btn" onclick="showQR()" title="QRコード">⊞</button>
     </div>
   </div>
@@ -333,6 +332,7 @@ const state = {
   isPaused: false,       // 一時停止フラグ
   savedLocally: false,   // IDBに保存済み
   uploadedToVps: false,  // VPSアップロード済み
+  speakerEvents: [],     // 話者ボタン押下イベント {ts, ms, speaker_idx, speaker_name}
   startTime: null,
   timerInterval: null,
   restartTimer: null,
@@ -431,6 +431,47 @@ $('btn-start-rec').addEventListener('click', () => {
 });
 
 // ══════════════════════════════════════
+// STT 結果ハンドラ（共通：startRecording / resumeRecording 両方で使用）
+// ══════════════════════════════════════
+function handleSTTResult({text, isFinal}) {
+  if (isFinal) {
+    const interimIdx = state.segments.findIndex(s => s.isInterim);
+    if (interimIdx >= 0) {
+      state.segments[interimIdx] = {
+        text: text.trim(),
+        speakerIdx: state.segments[interimIdx].speakerIdx ?? state.currentSpeaker,
+        ts: state.segments[interimIdx].ts,
+        highlight: state.segments[interimIdx].highlight || state.nextHighlight,
+        isInterim: false,
+      };
+      state.nextHighlight = false;
+    } else if (text.trim()) {
+      state.segments.push({
+        text: text.trim(),
+        speakerIdx: state.currentSpeaker,
+        ts: getElapsed(),
+        highlight: state.nextHighlight,
+        isInterim: false,
+      });
+      state.nextHighlight = false;
+    }
+    renderRecTranscript();
+  } else {
+    const interimIdx = state.segments.findIndex(s => s.isInterim);
+    if (interimIdx >= 0) {
+      state.segments[interimIdx].text = text;
+      state.segments[interimIdx].speakerIdx = state.currentSpeaker;
+    } else {
+      state.segments.push({
+        text, speakerIdx: state.currentSpeaker,
+        ts: getElapsed(), highlight: false, isInterim: true,
+      });
+    }
+    renderRecTranscript();
+  }
+}
+
+// ══════════════════════════════════════
 // STT プロバイダー（差し替えポイント）
 // ══════════════════════════════════════
 function createSTT() {
@@ -484,46 +525,7 @@ async function startRecording() {
   // STT
   const stt = createSTT();
   if (!stt) { toast('このブラウザは音声認識非対応'); return; }
-  stt.onResult = ({text, isFinal}) => {
-    if (isFinal) {
-      // interim を確定セグメントに変換
-      const interimIdx = state.segments.findIndex(s => s.isInterim);
-      if (interimIdx >= 0) {
-        state.segments[interimIdx] = {
-          text: text.trim(),
-          speakerIdx: state.segments[interimIdx].speakerIdx ?? state.currentSpeaker,
-          ts: state.segments[interimIdx].ts,
-          highlight: state.segments[interimIdx].highlight || state.nextHighlight,
-          isInterim: false,
-        };
-        state.nextHighlight = false;
-      } else if (text.trim()) {
-        state.segments.push({
-          text: text.trim(),
-          speakerIdx: state.currentSpeaker,
-          ts: getElapsed(),
-          highlight: state.nextHighlight,
-          isInterim: false,
-        });
-        state.nextHighlight = false;
-      }
-      renderRecTranscript();
-    } else {
-      // interim: 既存を更新 or 追加
-      const interimIdx = state.segments.findIndex(s => s.isInterim);
-      if (interimIdx >= 0) {
-        state.segments[interimIdx].text = text;
-        // 話者ボタン押下時のリアルタイム反映
-        state.segments[interimIdx].speakerIdx = state.currentSpeaker;
-      } else {
-        state.segments.push({
-          text, speakerIdx: state.currentSpeaker,
-          ts: getElapsed(), highlight: false, isInterim: true,
-        });
-      }
-      renderRecTranscript();
-    }
-  };
+  stt.onResult = handleSTTResult;
   stt.onEnd = () => {
     if (state.isRecording) {
       state.restartTimer = setTimeout(() => { try { stt.start(); } catch(e){} }, 300);
@@ -742,6 +744,7 @@ async function completeAndUpload() {
       segments: state.segments
         .filter(s => !s.isInterim)
         .map(s => ({text: s.text, speakerIdx: s.speakerIdx, ts: s.ts, highlight: s.highlight})),
+      speaker_events: state.speakerEvents,  // 話者ボタン押下のタイムスタンプ列
     };
     fd.append('meta', JSON.stringify(meta));
     state.allAudioBlobs.forEach(({blob}, i) => fd.append('audio', blob, `rec_${i}.webm`));
@@ -750,8 +753,12 @@ async function completeAndUpload() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.uploadedToVps = true;
-    toast(`完了しました。管理画面へ移動します（${state.allAudioBlobs.length}件アップロード）`, 2500);
-    setTimeout(() => { window.location.href = '/ai-voice-memo/admin/'; }, 2500);
+    toast(`✅ 完了しました（${state.allAudioBlobs.length}件アップロード）。PCの管理画面で解析・確認してください`, 4000);
+    // モバイルは管理画面に遷移しない。録音と話者選択のみ
+    const btn = $('btn-complete-rec');
+    btn.textContent = '✓ 送信完了';
+    btn.style.background = 'var(--green)';
+    setTimeout(() => { btn.disabled = false; btn.textContent = '保存して完了 →'; btn.style.background = ''; }, 5000);
   } catch(e) {
     btn.disabled = false;
     btn.textContent = '保存して完了 →';
@@ -784,6 +791,16 @@ function renderSpeakerBtns() {
       state.currentSpeaker = i;
       const interim = state.segments.find(s => s.isInterim);
       if (interim) interim.speakerIdx = i;
+      // 話者ボタン押下の精密なタイムスタンプを記録（LLM突合に活用）
+      if (state.isRecording && state.startTime) {
+        const ms = Date.now() - state.startTime;
+        state.speakerEvents.push({
+          ts: getElapsed(),         // "MM:SS" 表記
+          ms: ms,                   // ミリ秒精度
+          speaker_idx: i,
+          speaker_name: name || `話者${i+1}`,
+        });
+      }
       renderSpeakerBtns();
       renderRecTranscript();
     });
