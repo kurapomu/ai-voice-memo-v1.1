@@ -155,6 +155,16 @@ audio{width:100%;height:40px}
   pointer-events:none;white-space:nowrap;z-index:99}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
+/* ── 録音ステータスインジケーター ── */
+#rec-status{font-size:12px;font-weight:700;letter-spacing:.04em;
+  padding:2px 8px;border-radius:10px}
+.status-live{color:var(--red);background:rgba(229,62,62,.12);animation:blink 1.4s infinite}
+.status-pause{color:var(--yellow);background:rgba(251,191,36,.12)}
+.status-error{color:var(--red);background:rgba(229,62,62,.12);animation:blink .8s infinite}
+@keyframes blink{50%{opacity:.45}}
+#btn-pause-rec{background:var(--yellow);color:#111;font-weight:700}
+#btn-pause-rec.paused{background:var(--red);color:#fff}
+
 /* ── ブラウザ警告オーバーレイ ── */
 #browser-warn{
   display:none;position:fixed;inset:0;z-index:999;
@@ -239,7 +249,10 @@ audio{width:100%;height:40px}
 <!-- ════ 画面2：録音 ════ -->
 <div id="screen-rec" class="screen">
   <div class="hdr">
-    <h1>録音中</h1>
+    <div style="display:flex;align-items:center;gap:8px">
+      <h1 id="rec-screen-title">録音中</h1>
+      <span id="rec-status" class="status-live">● LIVE</span>
+    </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
       <span id="rec-timer">00:00</span>
       <span id="rec-remaining" style="font-size:12px;color:var(--sub)">残り 60:00</span>
@@ -251,10 +264,12 @@ audio{width:100%;height:40px}
   <div id="rec-controls">
     <div id="level-bar"><div id="level-fill"></div></div>
     <div id="speaker-btns"></div>
+    <div id="chunks-info" style="font-size:12px;color:var(--sub);text-align:center;margin-bottom:4px"></div>
     <div class="rec-row">
-      <button id="btn-stop-rec">録音停止</button>
+      <button id="btn-pause-rec">一時停止</button>
       <button id="btn-hl" title="ハイライト">★</button>
     </div>
+    <button id="btn-complete-rec" style="background:var(--green);color:#fff;width:100%;padding:14px;font-weight:700">保存して完了 →</button>
   </div>
 </div>
 
@@ -308,6 +323,7 @@ const state = {
   audioBlob: null,
   audioUrl: null,
   allAudioBlobs: [],     // 停止/再開ごとのBlobを蓄積（プロジェクト単位）
+  isPaused: false,       // 一時停止フラグ
   startTime: null,
   timerInterval: null,
   restartTimer: null,
@@ -506,6 +522,7 @@ async function startRecording() {
 
   // 状態更新
   state.isRecording = true;
+  state.isPaused = false;
   state.segments = [];
   state.startTime = Date.now();
   state.timerInterval = setInterval(updateTimer, 1000);
@@ -513,6 +530,9 @@ async function startRecording() {
   // レベルバー
   $('level-bar').classList.add('active');
   animateLevel();
+
+  // UI更新
+  updateRecUI();
 
   // 話者ボタン描画
   renderSpeakerBtns();
@@ -524,6 +544,7 @@ async function startRecording() {
 // 録音停止
 // ══════════════════════════════════════
 function stopRecording() {
+  // 互換用：内部で完了処理として残す（タイマーリセット・録音停止）
   state.isRecording = false;
   clearInterval(state.timerInterval);
   clearTimeout(state.restartTimer);
@@ -543,7 +564,190 @@ function stopRecording() {
   state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
 }
 
-$('btn-stop-rec').addEventListener('click', stopRecording);
+// ══════════════════════════════════════
+// 一時停止（録音中→停止状態へ／チャンク保存）
+// ══════════════════════════════════════
+function pauseRecording() {
+  if (!state.isRecording || state.isPaused) return;
+  state.isPaused = true;
+  state.isRecording = false;
+  clearInterval(state.timerInterval);
+  clearTimeout(state.restartTimer);
+  $('level-bar').classList.remove('active');
+  $('level-fill').style.width = '0%';
+  try { state.stt?.stop(); } catch(e) {}
+
+  state.mediaRecorder.onstop = () => {
+    const mime = state.mediaRecorder.mimeType || 'audio/webm';
+    const blob = new Blob(state.audioChunks, {type: mime});
+    state.allAudioBlobs.push({blob, mime});
+    state.audioChunks = [];
+    updateRecUI();
+    toast(`一時停止しました（チャンク${state.allAudioBlobs.length}件保存）`);
+  };
+  state.mediaRecorder.stop();
+  state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
+}
+
+// ══════════════════════════════════════
+// 録音再開（新しいMediaRecorderを開始）
+// ══════════════════════════════════════
+async function resumeRecording() {
+  if (!state.isPaused) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
+    state.mediaRecorder = mr;
+    state.audioChunks = [];
+    mr.ondataavailable = e => { if (e.data.size > 0) state.audioChunks.push(e.data); };
+    mr.start(1000);
+
+    // STT再開
+    state.stt = createSTT();
+    state.stt.onResult = handleSTTResult;
+    state.stt.onEnd = () => {
+      if (state.isRecording) {
+        state.restartTimer = setTimeout(() => { try { state.stt.start(); } catch(e) {} }, 300);
+      }
+      updateRecStatus();
+    };
+    state.stt.onError = (err) => {
+      if (err === 'not-allowed') { toast('マイク許可が必要です'); pauseRecording(); }
+      updateRecStatus();
+    };
+    state.stt.start();
+
+    // 録音タイマー再開（startTimeは累計のために以前のまま）
+    state.isPaused = false;
+    state.isRecording = true;
+    if (!state.startTime) state.startTime = Date.now();
+    state.timerInterval = setInterval(updateTimer, 1000);
+    requestAnimationFrame(animateLevel);
+    updateRecUI();
+    toast('録音を再開しました');
+  } catch(e) {
+    toast('録音再開失敗: ' + (e.message || e));
+    updateRecStatus();
+  }
+}
+
+// ══════════════════════════════════════
+// 録音UI更新（一時停止/録音中の切り替え）
+// ══════════════════════════════════════
+function updateRecUI() {
+  const pauseBtn = $('btn-pause-rec');
+  const title    = $('rec-screen-title');
+  const hlBtn    = $('btn-hl');
+  const chunks   = $('chunks-info');
+  if (state.isPaused) {
+    pauseBtn.textContent = '▶ 録音を再開';
+    pauseBtn.classList.add('paused');
+    title.textContent = '一時停止中';
+    if (hlBtn) hlBtn.style.display = 'none';
+  } else if (state.isRecording) {
+    pauseBtn.textContent = '⏸ 一時停止';
+    pauseBtn.classList.remove('paused');
+    title.textContent = '録音中';
+    if (hlBtn) hlBtn.style.display = '';
+  }
+  chunks.textContent = state.allAudioBlobs.length > 0
+    ? `保存済みチャンク: ${state.allAudioBlobs.length}件`
+    : '';
+  updateRecStatus();
+}
+
+// ══════════════════════════════════════
+// 録音ステータスインジケーター
+// ══════════════════════════════════════
+function updateRecStatus() {
+  const el = $('rec-status');
+  if (!el) return;
+  el.className = '';
+  if (state.isPaused) {
+    el.textContent = '⏸ 停止中';
+    el.classList.add('status-pause');
+  } else if (state.isRecording) {
+    el.textContent = '● LIVE';
+    el.classList.add('status-live');
+  } else {
+    el.textContent = '⚠ 待機';
+    el.classList.add('status-error');
+  }
+}
+
+// ══════════════════════════════════════
+// 「保存して完了」ボタン
+// ══════════════════════════════════════
+async function completeAndUpload() {
+  const btn = $('btn-complete-rec');
+  btn.disabled = true;
+  btn.textContent = '保存処理中…';
+
+  // 録音中ならまず停止してチャンク確定
+  if (state.isRecording) {
+    await new Promise(resolve => {
+      const oldOnstop = state.mediaRecorder.onstop;
+      state.mediaRecorder.onstop = () => {
+        const mime = state.mediaRecorder.mimeType || 'audio/webm';
+        const blob = new Blob(state.audioChunks, {type: mime});
+        state.allAudioBlobs.push({blob, mime});
+        resolve();
+      };
+      state.mediaRecorder.stop();
+      state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    });
+    state.isRecording = false;
+    clearInterval(state.timerInterval);
+    try { state.stt?.stop(); } catch(e) {}
+  }
+
+  if (state.allAudioBlobs.length === 0) {
+    btn.disabled = false;
+    btn.textContent = '保存して完了 →';
+    toast('録音データがありません');
+    return;
+  }
+
+  finalizeSegments();
+  state.audioBlob = state.allAudioBlobs[state.allAudioBlobs.length - 1].blob;
+  state.audioUrl  = URL.createObjectURL(state.audioBlob);
+
+  btn.textContent = 'アップロード中…';
+  try {
+    const fd = new FormData();
+    const meta = {
+      name: ($('mtg-name-input').value.trim()) ||
+            ('MTG ' + new Date().toLocaleDateString('ja-JP', {year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'-')),
+      participants: [...state.participants],
+      segments: state.segments
+        .filter(s => !s.isInterim)
+        .map(s => ({text: s.text, speakerIdx: s.speakerIdx, ts: s.ts, highlight: s.highlight})),
+    };
+    fd.append('meta', JSON.stringify(meta));
+    state.allAudioBlobs.forEach(({blob}, i) => fd.append('audio', blob, `rec_${i}.webm`));
+
+    const res = await fetch(`${API_BASE}/api/projects`, {method:'POST', body: fd});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    toast(`完了しました。管理画面へ移動します（${state.allAudioBlobs.length}件アップロード）`, 2500);
+    setTimeout(() => { window.location.href = '/ai-voice-memo/admin/'; }, 2500);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '保存して完了 →';
+    toast('アップロード失敗: ' + e.message, 3000);
+  }
+}
+
+// ══════════════════════════════════════
+// 一時停止/再開トグル
+// ══════════════════════════════════════
+$('btn-pause-rec').addEventListener('click', () => {
+  if (state.isPaused) resumeRecording();
+  else pauseRecording();
+});
+$('btn-complete-rec').addEventListener('click', completeAndUpload);
 
 // ══════════════════════════════════════
 // 話者ボタン
