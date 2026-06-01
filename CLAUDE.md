@@ -1,158 +1,229 @@
-# AIボイスメモ PWA — CLAUDE.md
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
 
 ## プロジェクト概要
 
-対面録音特化のAIボイスメモPWA。専用ハードウェア不要で、iPhoneのSafariからホーム画面に追加して利用する。
-Web Speech APIによるリアルタイム文字起こしをコアとし、将来的にAssemblyAI等の高精度AIと二段階で突合する設計。
+対面録音特化のAIボイスメモPWA。iPhoneのSafariからホーム画面に追加して使用する。
+**二段階方式**：モバイルで録音＋Web Speechの話者ボタン（参考データ）→ VPSにアップロード →
+Whisperで高精度文字起こし → Gemini 2.5 FlashでLLM統合 → PC管理画面で確認。
 
 ---
 
-## 技術スタック
+## 全体構成（重要）
 
-| 層 | 技術 | 備考 |
-|---|---|---|
-| フロントエンド | HTML / CSS / JavaScript（PWA） | React不使用。VanillaJS徹底 |
-| STT（現在） | Web Speech API（ブラウザ標準） | 無料・追加サーバー不要 |
-| STT（将来） | AssemblyAI API | 話者分離・正確なタイムスタンプ対応 |
-| 要約・Q&A（将来） | Claude API（Haiku優先） | プロンプトキャッシュ設計を組み込む |
-| 音声保存 | MediaRecorder API → IndexedDB | 32kbps webm形式 |
-| バックエンド（将来） | Python / FastAPI | PII保護（Presidio + GiNZA）と連携 |
-| デプロイ | GitHub Pages（現在）→ レンタルサーバー/VPS（将来） | HTTPS必須 |
-
----
-
-## バージョン履歴
-
-### v1（完成・凍結）
-- 対面録音（MediaRecorder API）
-- リアルタイム文字起こし（Web Speech API）
-- ハイライト★ボタン（タイムスタンプ記録）
-- 全文コピー
-- PWAマニフェスト・Service Worker
-
-### v1.1（現行開発版）
-- 参加者名事前入力（最大5人）
-- 話者切替ボタン（録音中にタップ、カラー表示）
-- interimセグメントへのリアルタイム話者反映
-- 名乗り検出：「鈴木です」→ `[鈴木]` に自動変換（登録名に限定・セグメント全体を対象）
-- 録音音声の保存（32kbps webm・MediaRecorder）
-- 結果画面：セグメントごとのプルダウン話者変更・テキスト直接編集
-- 音声プレイヤー（聴き直し）
-- IndexedDB保存・履歴一覧・削除・再読込
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ ① モバイルPWA  https://jizo-dev.com/ai-voice-memo/               │
+│   ・MediaRecorder（32kbps webm）                                  │
+│   ・Web Speech APIで録音中リアルタイム文字起こし＋話者ボタン      │
+│   ・MTG名入力 → 録音 → 一時停止/再開 → 「保存して完了」          │
+│   ・60分制限・残り時間表示・自動停止                              │
+│   ・IndexedDBにも保存（ローカル履歴）                             │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │ POST /api/projects（multipart：音声＋meta JSON）
+                   ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ ② VPS（root@162.43.14.31 / jizo-dev.com / Ubuntu 22.04）          │
+│   Nginx（HTTPS / Let's Encrypt）                                  │
+│   ├ /ai-voice-memo/       静的PWA                                 │
+│   ├ /ai-voice-memo/admin/ PC管理画面（Basic認証）                 │
+│   └ /api/                 FastAPI（systemd: jizo-api / :8002）    │
+│                                                                   │
+│   ストレージ:                                                     │
+│   ├ /var/jizo/audio/*.webm   録音音声                            │
+│   └ /var/jizo/jizo.db        SQLite                              │
+└─────────┬────────────────────────────────────────────────────────┘
+          │
+          ├──► ③ OpenAI Whisper API（whisper-1）                   │
+          │       Run1=ja固定 / Run2=自動判定＋プロンプトヒント    │
+          │       同期API・即completedで保存                       │
+          │                                                         │
+          └──► ④ Google Gemini API（gemini-2.5-flash）             │
+                  LLM Gateway互換 OpenAI形式                       │
+                  Web Speech＋Whisper Run1/2を統合し最終版生成     │
+                  【要確認】タグで不確実箇所をマーク               │
+```
 
 ---
 
 ## ファイル構成
 
-```
-ai-voice-memo/        ← v1（GitHub Pages公開済み・凍結）
-├── index.html
-├── manifest.json
-└── sw.js
+### ローカル（このディレクトリ）
+- `index.html` — モバイルPWA全体（VanillaJS・約1000行）
+- `manifest.json` — PWAマニフェスト
+- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）
 
-ai-voice-memo-v1.1/   ← v1.1（別リポジトリ）
-├── index.html
-├── manifest.json
-└── sw.js
+### VPS（`root@162.43.14.31`）
+- `/var/www/jizo-dev.com/ai-voice-memo/index.html` — モバイルPWA（↑のコピー）
+- `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` — PC管理画面
+- `/opt/jizo-api/main.py` — FastAPI 全API
+- `/opt/jizo-api/db.py` — SQLiteスキーマ＋接続
+- `/opt/jizo-api/.env` — APIキー等（ASSEMBLYAI / OPENAI / GEMINI / ADMIN_USER / ADMIN_PASS）
+- `/etc/systemd/system/jizo-api.service` — FastAPI systemd
+
+---
+
+## よく使うコマンド
+
+### デプロイ
+```bash
+# モバイルアプリ更新
+scp "c:\Users\taka\Downloads\files (1)\index.html" root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/index.html
+
+# FastAPI更新
+scp local_main.py root@162.43.14.31:/opt/jizo-api/main.py
+ssh root@162.43.14.31 "systemctl restart jizo-api"
+
+# 管理画面更新
+scp admin.html root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/admin/index.html
+
+# Service Workerを更新したら必ず sw.js の CACHE バージョンを上げる（voicememo-vX.Y）
+```
+
+### ログ確認
+```bash
+# FastAPIログ（12h ローテーション）
+curl -s -u test:test "https://jizo-dev.com/api/logs?lines=200"
+
+# systemdログ
+ssh root@162.43.14.31 "journalctl -u jizo-api -n 50 --no-pager"
+
+# Nginx設定
+ssh root@162.43.14.31 "cat /etc/nginx/sites-available/jizo-dev.com"
+```
+
+### DB確認
+```bash
+ssh root@162.43.14.31 "python3 -c \"
+import sqlite3
+c = sqlite3.connect('/var/jizo/jizo.db')
+print(c.execute('SELECT id,name,status FROM projects ORDER BY created_at DESC LIMIT 5').fetchall())
+\""
+```
+
+### ローカルテスト
+```bash
+python3 -m http.server 5500  # → http://localhost:5500
 ```
 
 ---
 
-## 設計方針
+## DBスキーマ（VPS SQLite）
+
+```sql
+projects(id TEXT PK, name TEXT, created_at TEXT, status TEXT)
+  -- status: uploaded | analyzing_run1 | analyzing_run2 | completed_run1 | completed_run2 | merged | error
+
+recordings(id INTEGER PK AUTOINCREMENT, project_id, seq, audio_path, mime, duration, created_at)
+
+ref_segments(id, project_id, seq, text, speaker_idx, ts, highlight)
+  -- Web Speech + 話者ボタン参考データ
+
+participants(project_id, idx, name)
+
+ai_transcripts(id, project_id, recording_id, run_number, aai_id, status,
+               full_text, utterances_json, speaker_map_json, error)
+  -- run_number=1 or 2、aai_id は 'whisper:{rec_id}:{run}' 形式
+
+merged_transcripts(id, project_id, model, result_json, notes_json, created_at)
+  -- LLM統合結果。result_json = [{ts, speaker, text, note}]
+```
+
+---
+
+## API エンドポイント
+
+| メソッド | パス | 認証 | 用途 |
+|---|---|---|---|
+| GET | `/api/health` | なし | ヘルスチェック |
+| GET | `/api/logs?lines=N` | Basic | サーバーログ閲覧 |
+| POST | `/api/projects` | なし | モバイルからのアップロード（multipart） |
+| GET | `/api/projects` | Basic | プロジェクト一覧（管理画面用） |
+| GET | `/api/projects/{id}` | Basic | プロジェクト詳細 |
+| PATCH | `/api/projects/{id}` | Basic | MTG名変更（`{name: ...}`） |
+| DELETE | `/api/projects/{id}` | Basic | プロジェクト削除（音声＋DB全件） |
+| POST | `/api/projects/{id}/analyze?run=1or2&force=true` | なし | Whisper解析実行 |
+| GET | `/api/projects/{id}/poll` | なし | 解析状態ポーリング（Whisperはスキップ） |
+| POST | `/api/projects/{id}/merge?model=...` | Basic | Gemini で LLM 最終版生成 |
+| GET | `/api/audio/{id}/{seq}` | Basic | 音声ファイル配信 |
+
+---
+
+## 設計方針（厳守）
 
 ### STT差し替えポイント
-`createSTT()` 関数のみを差し替えることで、Web Speech API → Whisper / AssemblyAI への移行が可能。
-UIロジック・録音処理・IndexedDB保存には一切手を入れない。
+`createSTT()` 関数のみを差し替えることでWeb Speech API → Whisper等へ移行可能。
+UIロジック・録音処理・IndexedDB保存には**一切手を入れない**。
 
 ### 二段階方式（話者分離）
-```
-【リアルタイム層：Web Speech（参考データ）】
-  録音中に文字起こし＋話者ボタン操作で話者ラベルを付与
-  ↓
-【後処理層：高精度AI（本番データ）】
-  保存した録音音声を AssemblyAI 等に送信
-  Web Speechの結果を補助データとして突合し、話者分離と精度を向上
-```
+- **リアルタイム層**：Web Speech＋話者ボタン → **話者ラベルが人手で確認済み・最高信頼度**
+- **後処理層**：Whisper Run1/Run2 → テキスト精度は高いが話者分離なし（全`'A'`）
+- **統合**：LLMが「話者＝Web Speech、テキスト＝Whisper」で前後文脈を加味して最終版を作る
 
-### IndexedDB 保存スキーマ
-```javascript
-{
-  id,            // 自動採番
-  createdAt,     // ISO8601
-  duration,      // "MM:SS"
-  participants,  // ['佐藤', '鈴木', ...]
-  segments: [{
-    text,        // 文字起こしテキスト
-    speakerIdx,  // 話者インデックス（null=未設定）
-    ts,          // タイムスタンプ "MM:SS"
-    highlight,   // ハイライトフラグ
-    isInterim,   // 確定フラグ
-  }],
-  audioMime,     // "audio/webm;codecs=opus"
-  audioData,     // ArrayBuffer（録音音声）
-}
-```
+### Whisper運用ルール
+- Run1: `language='ja'` 固定
+- Run2: `language=None` + `prompt`（参加者名＋カタカナ固有名詞をヒント）
+- 同期API＝即`completed`で保存。`aai_id` プレフィクスは `whisper:` で識別
 
-### 話者ボタン押下時の挙動
-- 押下瞬間：現在生成中の interim セグメントの `speakerIdx` を即時更新
-- 録音終了後：セグメント冒頭に話者バッジとして補正表示
-- 参考データのため、若干のズレは許容する
+### LLM突合プロンプト方針
+- システムプロンプト：日本語ASR補正専門家
+- 出力形式：`[{ts, speaker, text, note}]` のJSON
+- スペース除去・句読点付与・同音異義語修正・固有名詞文脈推定
+- 不確実箇所は `【要確認:理由】` インラインタグ＋`note` フィールド
 
-### 名乗り検出ルール
-- 対象：登録した参加者名に限定（誤検出防止）
-- 検出範囲：セグメント全体（発言のどこにあっても検出）
-- パターン：`{名前}です` → `[{名前}]` に変換
-- 実行タイミング：録音終了後の後処理（`applyNameDeclaration()`）
+### 差分比較の正規化
+管理画面の4カラム比較で「内容の差異」だけを検出するため、比較時は：
+- 日本語間スペース除去
+- 句読点（`。、！？!?,\.・`）除去
+- `【要確認...】`タグ除去
 
----
-
-## コスト設計
-
-| サービス | 単価 | 月100分想定 |
-|---|---|---|
-| Web Speech API | 無料 | 0円 |
-| AssemblyAI（文字起こし＋話者分離） | $0.00283/分 | 約42円 |
-| Claude API Haiku（要約・Q&A） | 従量 | 月1ドル未満 |
-| 合計（将来構成） | — | 約150〜300円 |
-
-- AssemblyAIの無料クレジット：$50（約185時間分）→PoC期間は実質無料
-- プロンプトキャッシュで要約コストを最大90%削減する設計を将来フェーズで組み込む
-
----
-
-## 将来フェーズ
-
-### フェーズ2（次回）
-- AssemblyAI連携（録音→自動話者分離）
-- FastAPIバックエンド構築
-- 音声の一時保管（S3等）→ AssemblyAIへURL渡し
-- Web Speech結果との突合処理
-
-### フェーズ3
-- Claude API連携（要約・ToDo抽出・Q&A）
-- 用途別テンプレート（会議・インタビュー・講義）
-- Presidio + GiNZA によるPII保護
-
-### フェーズ4
-- VPS/レンタルサーバーへの本番移設
-- プライバシーポリシー整備・公開
+表示テキストは元のまま、比較だけ正規化版を使う。
 
 ---
 
 ## 制約・注意事項
 
-- **HTTPS必須**：Web Speech API・マイクアクセスともにHTTPSでのみ動作（localhostは例外）
-- **iOS Safari固有**：バックグラウンド録音は停止しやすい。STT自動再起動ロジックで対処（`onEnd`時に300ms後に再起動）
-- **iOS 7日間削除**：PWAとしてホーム画面に追加することで緩和。長期保存は将来のバックエンドで対応
-- **通話録音は対象外**：iOSはウェブ・アプリを問わず通話音声へのアクセス不可
-- **フォントサイズ**：16px基準・4の倍数のみ使用（16/20/24/28/32px）。16px未満は全禁止
+- **HTTPS必須**：Web Speech API・マイクアクセスともHTTPSでのみ動作
+- **iOS Safari固有**：バックグラウンドでMediaRecorderが止まる。STT自動再起動（`onEnd`→300ms後）で対処
+- **iOS 7日間削除**：PWAホーム画面追加で緩和。完全永続はVPS側
+- **録音上限60分**：Whisper API ファイルサイズ25MB制限＋UX。残り5分で警告、60分で自動停止
+- **フォントサイズ**：16px基準・4の倍数のみ（16/20/24/28/32px）
+- **配色**：単色のみ・**グラデーション全面禁止**（CLAUDE.md global rule）。WCAG AAコントラスト遵守
+- **APIキーは絶対クライアントに出さない**：すべてVPSの`.env`管理、FastAPIでプロキシ
 - **成果物に個人名・法人名を含めない**
 
 ---
 
-## 開発・テスト環境
+## 認証情報・URL
 
-- MacBook + VS Code
-- ローカルテスト：`python3 -m http.server 5500` → `http://localhost:5500`
-- 公開：GitHub Pages（HTTPS自動・無料）
-- Android Chrome でも追加作業なしで動作確認済み
+- VPS SSH: `ssh root@162.43.14.31`（鍵認証済み）
+- モバイルアプリ: `https://jizo-dev.com/ai-voice-memo/`
+- PC管理画面: `https://jizo-dev.com/ai-voice-memo/admin/`（ID: `test` / PW: `test`）
+- GitHubリポジトリ: `https://github.com/kurapomu/ai-voice-memo-v1.1`（mainブランチ）
+- GitHub Pages: **無効化済み**（VPSのみで運用）
+
+---
+
+## 進捗・未完了
+
+### 完了
+- ✅ モバイルPWA（録音・Web Speech・話者ボタン・MTG名・残り時間・IndexedDB）
+- ✅ VPS構築（Nginx + HTTPS + FastAPI + SQLite + systemd）
+- ✅ Whisper連携（Run1/Run2・force再実行）
+- ✅ Gemini 2.5 Flash LLM統合（差分検出・要確認タグ）
+- ✅ PC管理画面（4カラム比較・歯車設定・MTG削除/改名・音声ダウンロード）
+- ✅ ログシステム（12hローテーション・`/api/logs`で閲覧）
+
+### 未着手（フェーズ3〜4）
+- ⬜ Claude API での要約・ToDo抽出・Q&A（CLAUDE.mdガイドラインでHaiku優先想定）
+- ⬜ 用途別テンプレート（会議・インタビュー・講義）
+- ⬜ Presidio + GiNZA によるPII保護
+- ⬜ プライバシーポリシー整備・公開
+- ⬜ 一時停止/再開フロー（フェーズ2f：プラン承認済み・未実装）
+
+### 検討事項
+- AssemblyAI連携コードは`main.py`に残置（Whisper移行後に再評価）
+- AssemblyAI $50無料クレジットは未使用
