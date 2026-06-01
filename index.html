@@ -434,6 +434,7 @@ $('btn-start-rec').addEventListener('click', () => {
 // STT 結果ハンドラ（共通：startRecording / resumeRecording 両方で使用）
 // ══════════════════════════════════════
 function handleSTTResult({text, isFinal}) {
+  state.lastSttAt = Date.now();  // STT稼働確認用
   if (isFinal) {
     const interimIdx = state.segments.findIndex(s => s.isInterim);
     if (interimIdx >= 0) {
@@ -528,12 +529,24 @@ async function startRecording() {
   stt.onResult = handleSTTResult;
   stt.onEnd = () => {
     if (state.isRecording) {
-      state.restartTimer = setTimeout(() => { try { stt.start(); } catch(e){} }, 300);
+      state.restartTimer = setTimeout(() => {
+        try { stt.start(); }
+        catch(e) {
+          console.error('STT restart failed:', e);
+          toast('🎤 STT再起動失敗。録音は継続中', 3000);
+        }
+      }, 300);
     }
+    updateRecStatus();
   };
   stt.onError = err => {
     if (err === 'no-speech') return;
+    console.error('STT error:', err);
     if (err === 'not-allowed') { toast('マイク許可が必要です'); stopRecording(); }
+    else if (err === 'audio-capture') { toast('🎤 マイク取得失敗'); }
+    else if (err === 'network') { toast('🎤 ネットワークエラー'); }
+    else { toast(`🎤 STT: ${err}`, 2500); }
+    updateRecStatus();
   };
   stt.start();
   state.stt = stt;
@@ -629,12 +642,23 @@ async function resumeRecording() {
     state.stt.onResult = handleSTTResult;
     state.stt.onEnd = () => {
       if (state.isRecording) {
-        state.restartTimer = setTimeout(() => { try { state.stt.start(); } catch(e) {} }, 300);
+        state.restartTimer = setTimeout(() => {
+          try { state.stt.start(); }
+          catch(e) {
+            console.error('STT restart failed:', e);
+            toast('🎤 STT再起動失敗。録音は継続中', 3000);
+          }
+        }, 300);
       }
       updateRecStatus();
     };
     state.stt.onError = (err) => {
+      if (err === 'no-speech') { updateRecStatus(); return; }
+      console.error('STT error:', err);
       if (err === 'not-allowed') { toast('マイク許可が必要です'); pauseRecording(); }
+      else if (err === 'audio-capture') { toast('🎤 マイク取得失敗'); }
+      else if (err === 'network') { toast('🎤 ネットワークエラー'); }
+      else { toast(`🎤 STT: ${err}`, 2500); }
       updateRecStatus();
     };
     state.stt.start();
@@ -685,12 +709,26 @@ function updateRecStatus() {
   const el = $('rec-status');
   if (!el) return;
   el.className = '';
+  if (state.uploadedToVps && state.allAudioBlobs.length > 0) {
+    el.textContent = '✓ 送信完了';
+    el.classList.add('status-pause');
+    el.style.color = 'var(--green)';
+    return;
+  }
+  el.style.color = '';
   if (state.isPaused) {
     el.textContent = '⏸ 停止中';
     el.classList.add('status-pause');
   } else if (state.isRecording) {
-    el.textContent = '● LIVE';
-    el.classList.add('status-live');
+    // STT稼働確認（最終onResult時刻から判定）
+    const sttAge = Date.now() - (state.lastSttAt || state.startTime || Date.now());
+    if (sttAge > 15000) {
+      el.textContent = '● LIVE ⚠STT停止？';
+      el.classList.add('status-error');
+    } else {
+      el.textContent = '● LIVE 🎤';
+      el.classList.add('status-live');
+    }
   } else {
     el.textContent = '⚠ 待機';
     el.classList.add('status-error');
@@ -753,6 +791,7 @@ async function completeAndUpload() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.uploadedToVps = true;
+    updateRecStatus();  // ヘッダーバッジを「✓ 送信完了」に更新
     toast(`✅ 完了しました（${state.allAudioBlobs.length}件アップロード）。PCの管理画面で解析・確認してください`, 4000);
     // モバイルは管理画面に遷移しない。録音と話者選択のみ
     const btn = $('btn-complete-rec');
@@ -891,6 +930,10 @@ function getElapsed() {
 }
 function updateTimer() {
   $('rec-timer').textContent = getElapsed();
+  // 5秒ごとにSTT稼働状態をチェック
+  if (Math.floor((Date.now() - (state.startTime || 0)) / 1000) % 5 === 0) {
+    updateRecStatus();
+  }
   const remainMs = MAX_REC_MS - (Date.now() - state.startTime);
   if (remainMs <= 0) {
     stopRecording();
