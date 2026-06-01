@@ -410,10 +410,17 @@ $('btn-add-name').addEventListener('click', () => {
 });
 
 $('btn-start-rec').addEventListener('click', () => {
+  // 入力中のフォーカスをコミット（モバイルSafari対策で値を確実に取り込む）
+  document.querySelectorAll('#name-list .name-input').forEach((inp, i) => {
+    state.participants[i] = inp.value.trim();
+  });
   // 空文字除去
   state.participants = state.participants.filter(n => n.trim() !== '');
   state.currentSpeaker = state.participants.length > 0 ? 0 : null;
-  startRecording();
+  // 保存表示→録音開始
+  const filled = state.participants.length;
+  toast(`参加者 ${filled}名 を保存しました。録音を開始します`, 1500);
+  setTimeout(startRecording, 400);
 });
 
 // ══════════════════════════════════════
@@ -1212,6 +1219,7 @@ $('btn-clear-project').addEventListener('click', () => {
   state.segments = [];
   state.audioBlob = null;
   state.allAudioBlobs = [];
+  state.participants = ['', '', '', ''];
   if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
   state.currentSpeaker = null;
   $('rec-timer').textContent = '00:00';
@@ -1230,6 +1238,7 @@ $('btn-new-rec').addEventListener('click', () => {
   state.segments = [];
   state.audioBlob = null;
   state.allAudioBlobs = [];
+  state.participants = ['', '', '', ''];
   if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
   state.currentSpeaker = null;
   $('rec-timer').textContent = '00:00';
@@ -1273,8 +1282,8 @@ function checkBrowser() {
 // 初期化
 // ══════════════════════════════════════
 function init() {
-  // 最初の参加者欄を1つ用意
-  state.participants = [''];
+  // 最初から4人分の入力欄を用意（録音中に追加・削除も可能）
+  state.participants = ['', '', '', ''];
   renderNameList();
 
   // PWA登録
