@@ -1,4 +1,4 @@
-const CACHE = 'voicememo-v1.7';
+const CACHE = 'voicememo-v1.8';
 const STATIC = ['./manifest.json'];
 
 self.addEventListener('install', e =>
