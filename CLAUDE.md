@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 対面録音特化のAIボイスメモPWA。iPhoneのSafariからホーム画面に追加して使用する。
 **二段階方式**：モバイルで録音＋Web Speechの話者ボタン（参考データ）→ VPSにアップロード →
-Whisperで高精度文字起こし → Gemini 2.5 FlashでLLM統合 → PC管理画面で確認。
+Whisper／Deepgram で高精度文字起こし（Run1/Run2 各エンジン選択可）→
+Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管理画面で確認。
 
 ---
 
@@ -20,7 +21,8 @@ Whisperで高精度文字起こし → Gemini 2.5 FlashでLLM統合 → PC管理
 │   ・MediaRecorder（32kbps webm）                                  │
 │   ・Web Speech APIで録音中リアルタイム文字起こし＋話者ボタン      │
 │   ・MTG名入力 → 録音 → 一時停止/再開 → 「保存して完了」          │
-│   ・60分制限・残り時間表示・自動停止                              │
+│   ・チャンクあたり20分制限・残り時間表示・20分で自動pause         │
+│   ・STT無反応20秒で確認バナー（モーダルではないインライン）       │
 │   ・IndexedDBにも保存（ローカル履歴）                             │
 └──────────────────┬───────────────────────────────────────────────┘
                    │ POST /api/projects（multipart：音声＋meta JSON）
@@ -37,13 +39,19 @@ Whisperで高精度文字起こし → Gemini 2.5 FlashでLLM統合 → PC管理
 │   └ /var/jizo/jizo.db        SQLite                              │
 └─────────┬────────────────────────────────────────────────────────┘
           │
-          ├──► ③ OpenAI Whisper API（whisper-1）                   │
-          │       Run1=ja固定 / Run2=自動判定＋プロンプトヒント    │
-          │       同期API・即completedで保存                       │
+          ├──► ③ 文字起こし（Runごとに選択）                       │
+          │     ・OpenAI Whisper API（whisper-1）同期・即completed │
+          │     ・Deepgram API（nova-3 / nova-2）話者分離あり      │
+          │       Nova-3 は keyterm 必須・Nova-2 は keywords        │
           │                                                         │
-          └──► ④ Google Gemini API（gemini-2.5-flash）             │
-                  LLM Gateway互換 OpenAI形式                       │
-                  Web Speech＋Whisper Run1/2を統合し最終版生成     │
+          └──► ④ Google Gemini API（gemini-2.5-flash / pro）       │
+                  OpenAI互換エンドポイント                         │
+                  3ソースを重み付け統合：                          │
+                    1. 重み最大ソースを「骨組み」→ 行数決定        │
+                    2. 各行 ±2秒以内で他2ソースを候補として添える │
+                    3. 話者は WS押下イベント優先度チェーンで決定  │
+                    4. LLMは「行追加・削除・マージ禁止」で候補から│
+                       重みに従って選ぶ／合成                      │
                   【要確認】タグで不確実箇所をマーク               │
 ```
 
@@ -61,7 +69,7 @@ Whisperで高精度文字起こし → Gemini 2.5 FlashでLLM統合 → PC管理
 - `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` — PC管理画面
 - `/opt/jizo-api/main.py` — FastAPI 全API
 - `/opt/jizo-api/db.py` — SQLiteスキーマ＋接続
-- `/opt/jizo-api/.env` — APIキー等（ASSEMBLYAI / OPENAI / GEMINI / ADMIN_USER / ADMIN_PASS）
+- `/opt/jizo-api/.env` — APIキー等（ASSEMBLYAI / OPENAI / DEEPGRAM / GEMINI / ADMIN_USER / ADMIN_PASS）
 - `/etc/systemd/system/jizo-api.service` — FastAPI systemd
 
 ---
@@ -125,8 +133,9 @@ ref_segments(id, project_id, seq, text, speaker_idx, ts, highlight)
 participants(project_id, idx, name)
 
 ai_transcripts(id, project_id, recording_id, run_number, aai_id, status,
-               full_text, utterances_json, speaker_map_json, error)
-  -- run_number=1 or 2、aai_id は 'whisper:{rec_id}:{run}' 形式
+               full_text, utterances_json, speaker_map_json, engine, settings_json, error)
+  -- run_number=1 or 2、aai_id は '{engine}:{rec_id}:{run}' 形式（engine=whisper or deepgram）
+  -- engine カラムでフィルタリング可能。Deepgram は speaker_map_json に話者分離結果あり
 
 merged_transcripts(id, project_id, model, result_json, notes_json, created_at)
   -- LLM統合結果。result_json = [{ts, speaker, text, note}]
@@ -147,7 +156,7 @@ merged_transcripts(id, project_id, model, result_json, notes_json, created_at)
 | DELETE | `/api/projects/{id}` | Basic | プロジェクト削除（音声＋DB全件） |
 | POST | `/api/projects/{id}/analyze?run=1or2&force=true` | なし | Whisper解析実行 |
 | GET | `/api/projects/{id}/poll` | なし | 解析状態ポーリング（Whisperはスキップ） |
-| POST | `/api/projects/{id}/merge?model=...` | Basic | Gemini で LLM 最終版生成 |
+| POST | `/api/projects/{id}/merge?model=...&w_ws=X&w_run1=Y&w_run2=Z` | Basic | Gemini で重み付き統合（合計10） |
 | GET | `/api/audio/{id}/{seq}` | Basic | 音声ファイル配信 |
 
 ---
@@ -168,11 +177,16 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - Run2: `language=None` + `prompt`（参加者名＋カタカナ固有名詞をヒント）
 - 同期API＝即`completed`で保存。`aai_id` プレフィクスは `whisper:` で識別
 
-### LLM突合プロンプト方針
-- システムプロンプト：日本語ASR補正専門家
+### LLM統合（重み付きアーキテクチャ）
+旧 `summary_level` / `webspeech_fidelity` は撤廃。**重み3軸**で制御：
+- パラメータ：`w_ws` / `w_run1` / `w_run2`（合計10になるよう正規化）
+- **骨組み選定**：重み最大ソースが行数を決める（同点時 run2>run1>ws）
+- **クラスタ構築**：骨組みの各セグメント=1行、他ソースは ±2秒以内の最近傍を候補に
+- **話者決定**：優先度チェーン（押下±2秒 → 直前継承 → WS ref_segments → 未設定）
+- **LLMタスク**：行追加/削除/マージ禁止。各行で「重みに従って候補から選ぶ・合成」
 - 出力形式：`[{ts, speaker, text, note}]` のJSON
-- スペース除去・句読点付与・同音異義語修正・固有名詞文脈推定
 - 不確実箇所は `【要確認:理由】` インラインタグ＋`note` フィールド
+- 話者「未設定」の行は `text` 末尾に `【要確認:話者】` を付記
 
 ### 差分比較の正規化
 管理画面の4カラム比較で「内容の差異」だけを検出するため、比較時は：
@@ -189,7 +203,8 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - **HTTPS必須**：Web Speech API・マイクアクセスともHTTPSでのみ動作
 - **iOS Safari固有**：バックグラウンドでMediaRecorderが止まる。STT自動再起動（`onEnd`→300ms後）で対処
 - **iOS 7日間削除**：PWAホーム画面追加で緩和。完全永続はVPS側
-- **録音上限60分**：Whisper API ファイルサイズ25MB制限＋UX。残り5分で警告、60分で自動停止
+- **録音上限20分/チャンク**：20分到達で自動 pause（stop ではない）。同プロジェクト内で再開すると2本目チャンクが追加。残り5分で黄色警告、1分で赤
+- **STT無反応検知**：Web Speechから20秒以上結果がない場合、録音画面にインラインバナー表示（モーダル/alert禁止）。再起動ボタン or 閉じるボタン付き
 - **フォントサイズ**：16px基準・4の倍数のみ（16/20/24/28/32px）
 - **配色**：単色のみ・**グラデーション全面禁止**（CLAUDE.md global rule）。WCAG AAコントラスト遵守
 - **APIキーは絶対クライアントに出さない**：すべてVPSの`.env`管理、FastAPIでプロキシ
@@ -212,9 +227,10 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 ### 完了
 - ✅ モバイルPWA（録音・Web Speech・話者ボタン・MTG名・残り時間・IndexedDB）
 - ✅ VPS構築（Nginx + HTTPS + FastAPI + SQLite + systemd）
-- ✅ Whisper連携（Run1/Run2・force再実行）
-- ✅ Gemini 2.5 Flash LLM統合（差分検出・要確認タグ）
-- ✅ PC管理画面（4カラム比較・歯車設定・MTG削除/改名・音声ダウンロード）
+- ✅ Whisper / Deepgram 連携（Run1/Run2・モデル選択・force再実行）
+- ✅ Gemini LLM統合（**重み付き 3軸スライダー**・差分検出・要確認タグ）
+- ✅ PC管理画面（4カラム比較・タイムライン軸マージ2秒窓・歯車設定・MTG削除/改名・音声ダウンロード）
+- ✅ 録音20分自動pause・STT無反応バナー
 - ✅ ログシステム（12hローテーション・`/api/logs`で閲覧）
 
 ### 未着手（フェーズ3〜4）
@@ -225,5 +241,6 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - ⬜ 一時停止/再開フロー（フェーズ2f：プラン承認済み・未実装）
 
 ### 検討事項
-- AssemblyAI連携コードは`main.py`に残置（Whisper移行後に再評価）
+- AssemblyAI連携コードは`main.py`に残置（Whisper/Deepgram移行後に再評価）
 - AssemblyAI $50無料クレジットは未使用
+- Run設定モーダルは「モデル」のみ選択（エンジンはモデルから自動派生：`whisper-1`→whisper / `nova-*`→deepgram）
