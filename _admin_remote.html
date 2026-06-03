@@ -1,0 +1,1659 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIボイスメモ 管理画面</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0a;--surface:#1a1a1a;--surface2:#242424;
+  --border:#2a2a2a;--text:#f0f0f0;--sub:#888;
+  --blue:#3b82f6;--green:#22c55e;--yellow:#fbbf24;
+  --red:#e53e3e;--sky:#0ea5e9;--purple:#a78bfa;
+  --r:10px;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif;
+  min-height:100vh;display:flex;flex-direction:column}
+
+/* ── ログインオーバーレイ ── */
+#login-overlay{position:fixed;inset:0;background:var(--bg);z-index:999;
+  display:flex;align-items:center;justify-content:center}
+#login-overlay.hidden{display:none}
+#login-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:32px;width:320px;display:flex;flex-direction:column;gap:16px}
+#login-box h2{font-size:20px;font-weight:700;text-align:center}
+#login-box input{background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);font-size:16px;padding:12px 14px;width:100%}
+#login-box button{background:var(--sky);color:#fff;border-radius:8px;
+  font-size:16px;font-weight:600;padding:13px;width:100%;border:none;cursor:pointer}
+#login-error{color:var(--red);font-size:14px;text-align:center;min-height:20px}
+
+/* ── ヘッダー ── */
+#app-header{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:14px 24px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+#app-header h1{font-size:18px;font-weight:700}
+#app-header span{font-size:13px;color:var(--sub)}
+
+/* ── レイアウト ── */
+#layout{display:flex;flex:1;overflow:hidden;height:calc(100vh - 49px)}
+#sidebar{width:300px;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+#main{flex:1;overflow-y:auto;padding:20px 24px}
+
+/* ── サイドバー ── */
+#sidebar-header{padding:12px 16px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between}
+#sidebar-header h2{font-size:15px;font-weight:600}
+#project-list{flex:1;overflow-y:auto}
+.proj-item{padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s}
+.proj-item:hover{background:var(--surface)}
+.proj-item.active{background:var(--surface);border-left:3px solid var(--blue)}
+.proj-name{font-size:15px;font-weight:600;margin-bottom:3px}
+.proj-meta{font-size:12px;color:var(--sub)}
+.proj-status{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;
+  border-radius:4px;margin-top:4px;white-space:nowrap}
+.s-uploaded{background:#1e3a5f;color:#60a5fa}
+.s-analyzing_run1,.s-analyzing_run2{background:#3d2b00;color:var(--yellow)}
+.s-completed_run1,.s-completed_run2{background:#14532d;color:#4ade80}
+.s-merged{background:#3b0764;color:#c4b5fd}
+.s-error{background:#7f1d1d;color:#fca5a5}
+#empty-msg{padding:24px;text-align:center;color:var(--sub);font-size:14px}
+
+/* ── メインエリア ── */
+#placeholder{display:flex;flex-direction:column;align-items:center;
+  justify-content:center;height:100%;color:var(--sub);gap:12px;font-size:16px}
+#detail{display:none}
+#detail.show{display:block}
+
+/* ── セクション ── */
+.section{background:var(--surface);border-radius:var(--r);padding:18px 20px;margin-bottom:14px}
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;cursor:pointer}
+.section-header h3{font-size:15px;font-weight:700}
+.section-toggle{color:var(--sub);font-size:13px}
+.section-body.collapsed{display:none}
+
+/* ── ボタン ── */
+button{border:none;border-radius:8px;font-size:14px;font-weight:600;
+  cursor:pointer;padding:9px 14px;transition:opacity .15s}
+button:hover{opacity:.85}
+button:disabled{opacity:.4;cursor:default}
+.btn-sky{background:var(--sky);color:#fff}
+.btn-green{background:var(--green);color:#fff}
+.btn-purple{background:var(--purple);color:#111}
+.btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-sm{padding:6px 10px;font-size:13px}
+
+/* ── アクションバー ── */
+.action-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.action-divider{width:1px;height:28px;background:var(--border);margin:0 4px}
+.run-group{display:flex;gap:6px;align-items:center}
+.run-label{font-size:12px;color:var(--sub)}
+#model-select{background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font-size:13px;padding:6px 8px}
+#poll-status{font-size:13px;color:var(--yellow);padding:4px 0}
+
+/* ── 4カラム比較テーブル ── */
+#merged-section{background:#1a0a2e;border:1px solid var(--purple);border-radius:var(--r);
+  padding:16px 20px;margin-bottom:14px}
+#merged-section h3{font-size:15px;font-weight:700;color:var(--purple);margin-bottom:12px}
+.compare-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border)}
+.compare-grid{
+  display:grid;
+  grid-template-columns:1.6fr 1fr 1fr 1fr;
+  min-width:700px;
+}
+.col-header{
+  background:var(--surface2);padding:7px 10px;
+  font-size:11px;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;
+  border-bottom:2px solid var(--border);
+  border-right:1px solid var(--border);
+  position:sticky;top:0;z-index:1;
+}
+.col-header:last-child{border-right:none}
+.col-header.h-llm{color:var(--purple)}
+.col-header.h-ws{color:var(--green)}
+.col-header.h-aai{color:var(--sky)}
+.compare-cell{
+  padding:9px 11px;
+  border-bottom:1px solid var(--border);
+  border-right:1px solid var(--border);
+  font-size:14px;line-height:1.55;
+  vertical-align:top;min-height:52px;
+}
+.compare-cell:last-child{border-right:none}
+.compare-cell.cell-diff{background:rgba(251,191,36,.1);border-left:2px solid var(--yellow)}
+.cell-meta{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.cell-speaker{font-size:12px;font-weight:700}
+.cell-ts{font-size:11px;color:var(--sub)}
+.cell-body{font-size:14px;line-height:1.5;word-break:break-all}
+.cell-empty{color:var(--border);font-size:18px}
+.cell-note-tag{display:block;font-size:11px;color:var(--yellow);
+  margin-top:4px;padding:2px 6px;background:#3d2b00;border-radius:3px}
+#notes-summary{margin-top:12px;padding:10px 12px;background:#1e1a00;
+  border-radius:6px;border-left:3px solid var(--yellow)}
+#notes-summary h4{font-size:13px;color:var(--yellow);margin-bottom:6px}
+.note-item{font-size:13px;color:#d4b83a;padding:2px 0}
+
+/* ── 要約・残タスク ── */
+#summary-section,#tasks-section{margin-top:12px;padding:14px 16px;border-radius:8px}
+#summary-section{background:#0d1f33;border-left:3px solid var(--sky)}
+#summary-section h4{font-size:14px;font-weight:700;color:var(--sky);margin-bottom:8px}
+#summary-body{font-size:14px;line-height:1.7;color:#d0e8ff;white-space:pre-wrap}
+#tasks-section{background:#0d2e1a;border-left:3px solid var(--green)}
+#tasks-section h4{font-size:14px;font-weight:700;color:var(--green);margin-bottom:8px}
+#tasks-list{margin:0;padding-left:20px;font-size:14px;line-height:1.7;color:#d0f8d8}
+#tasks-list li{margin-bottom:4px}
+#tasks-list.empty{color:var(--sub);font-style:italic;list-style:none;padding-left:0}
+
+/* ── Q&A ── */
+#qa-section{background:var(--surface);border-radius:var(--r);padding:18px 20px;margin-bottom:14px}
+#qa-section h3{font-size:15px;font-weight:700;color:var(--purple);margin-bottom:12px}
+#qa-history{display:flex;flex-direction:column;gap:12px;margin-bottom:16px;
+  max-height:400px;overflow-y:auto}
+.qa-pair{background:var(--surface2);border-radius:8px;padding:10px 12px}
+.qa-q{font-size:13px;color:var(--sky);font-weight:600;margin-bottom:6px}
+.qa-q::before{content:'Q: ';color:var(--sub)}
+.qa-a{font-size:14px;line-height:1.6;color:var(--text);white-space:pre-wrap}
+.qa-a::before{content:'A: ';color:var(--sub);font-weight:600}
+.qa-time{font-size:11px;color:var(--sub);margin-top:6px;text-align:right}
+.qa-input-wrap{display:flex;gap:8px;align-items:flex-start}
+#qa-input{flex:1;background:var(--surface2);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:14px;padding:10px 12px;
+  font-family:inherit;resize:vertical;min-height:60px}
+#btn-ask{background:var(--purple);color:#111;flex-shrink:0;height:60px;padding:0 16px}
+#btn-ask:disabled{opacity:.4}
+
+/* ── AssemblyAI runs ── */
+.runs-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:900px){.runs-grid{grid-template-columns:1fr}}
+.run-block{background:var(--surface2);border-radius:8px;padding:14px}
+.run-block h4{font-size:13px;font-weight:600;color:var(--sub);margin-bottom:8px}
+.aai-utt{padding:6px 8px;border-radius:6px;margin-bottom:4px;border-left:2px solid var(--border)}
+.aai-utt-top{display:flex;gap:6px;margin-bottom:2px}
+.aai-speaker{font-size:12px;font-weight:700;color:var(--sky)}
+.aai-time{font-size:11px;color:var(--sub)}
+.aai-text{font-size:14px;line-height:1.5;color:#d0d0d0}
+
+/* ── 参考データ ── */
+.ref-seg{display:flex;gap:8px;font-size:14px;padding:5px 0;
+  border-bottom:1px solid var(--border)}
+.ref-ts{color:var(--sub);width:40px;flex-shrink:0;font-size:12px}
+.ref-speaker{width:72px;flex-shrink:0;font-weight:600;font-size:13px}
+.ref-text{flex:1;line-height:1.5}
+
+/* ── 音声プレイヤー ── */
+.audio-item{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.audio-item label{font-size:13px;color:var(--sub);width:44px;flex-shrink:0}
+audio{flex:1;height:32px}
+
+/* ── 設定モーダル（APIキー・上限・使用量） ── */
+#settings-modal{display:none;position:fixed;inset:0;z-index:880;
+  align-items:center;justify-content:center}
+#settings-modal.show{display:flex}
+#settings-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.7)}
+#settings-box{position:relative;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);padding:24px 28px;width:640px;max-width:92vw;
+  max-height:88vh;overflow-y:auto;overscroll-behavior:contain;
+  z-index:1;display:flex;flex-direction:column;gap:18px}
+body.modal-open{overflow:hidden}
+#settings-box h3{font-size:18px;font-weight:700;color:var(--text)}
+#settings-box h4{font-size:14px;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;
+  padding-bottom:6px;border-bottom:1px solid var(--border)}
+.svc-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+  padding:14px;margin-bottom:10px}
+.svc-card-header{display:flex;justify-content:space-between;align-items:flex-start;
+  margin-bottom:10px}
+.svc-name{font-size:15px;font-weight:700}
+.svc-key{font-size:12px;color:var(--sub);font-family:monospace}
+.svc-key.unset{color:var(--red)}
+.svc-tier{font-size:11px;color:var(--sub);margin-top:2px}
+.usage-row{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:13px}
+.usage-label{width:120px;color:var(--sub);font-size:12px;flex-shrink:0}
+.usage-bar-wrap{flex:1;background:var(--border);height:8px;border-radius:4px;overflow:hidden}
+.usage-bar{height:100%;background:var(--green);transition:width .3s}
+.usage-bar.warn{background:var(--yellow)}
+.usage-bar.danger{background:var(--red)}
+.usage-text{width:160px;text-align:right;font-family:monospace;font-size:12px;flex-shrink:0}
+.svc-cost{font-size:13px;color:var(--sky);margin-top:8px;text-align:right;font-family:monospace}
+.settings-close-row{display:flex;justify-content:flex-end;margin-top:8px}
+#btn-settings-close{background:var(--surface2);color:var(--text);border:1px solid var(--border);
+  border-radius:8px;padding:9px 18px;font-size:14px;cursor:pointer}
+
+/* ── Run設定モーダル ── */
+.run-cog{background:none;border:none;color:var(--sub);font-size:16px;
+  padding:4px 6px;border-radius:6px;cursor:pointer;line-height:1}
+.run-cog:hover{color:var(--text);background:var(--surface2)}
+#run-modal{display:none;position:fixed;inset:0;z-index:850;
+  align-items:center;justify-content:center}
+#run-modal.show{display:flex}
+#run-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.65)}
+#run-box{position:relative;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);padding:24px;width:420px;max-width:90vw;
+  z-index:1;display:flex;flex-direction:column;gap:14px}
+#run-box h3{font-size:17px;font-weight:700}
+.run-field{display:flex;flex-direction:column;gap:4px}
+.run-field label{font-size:12px;color:var(--sub);font-weight:600}
+.run-field select,.run-field input[type=text]{background:var(--surface2);
+  border:1px solid var(--border);border-radius:6px;color:var(--text);
+  font-size:14px;padding:8px 10px}
+.run-field textarea{background:var(--surface2);border:1px solid var(--border);
+  border-radius:6px;color:var(--text);font-size:13px;padding:8px 10px;
+  font-family:inherit;resize:vertical;min-height:80px}
+.run-field-row{display:flex;gap:8px}
+.run-field-row .run-field{flex:1}
+.run-check{display:flex;align-items:center;gap:6px;font-size:14px}
+.run-check input{width:16px;height:16px}
+.run-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+#btn-run-save{background:var(--sky);color:#fff}
+#btn-run-reset{background:var(--surface2);color:var(--sub);border:1px solid var(--border)}
+#btn-run-cancel{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+
+/* ── 歯車設定パネル ── */
+#detail-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px}
+#btn-gear{background:none;border:none;color:var(--sub);font-size:20px;padding:4px 6px;
+  border-radius:6px;cursor:pointer;line-height:1;flex-shrink:0}
+#btn-gear:hover{color:var(--text);background:var(--surface2)}
+#settings-panel{display:none;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);padding:12px;margin-bottom:14px;
+  display:none;flex-direction:column;gap:8px}
+#settings-panel.open{display:flex}
+#settings-panel h4{font-size:13px;color:var(--sub);margin-bottom:2px}
+.settings-row{display:flex;gap:8px;flex-wrap:wrap}
+#btn-rename{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+#btn-delete{background:#7f1d1d;color:#fca5a5}
+/* 削除確認モーダル */
+#delete-modal{display:none;position:fixed;inset:0;z-index:900;
+  align-items:center;justify-content:center}
+#delete-modal.show{display:flex}
+#delete-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+#delete-box{position:relative;background:var(--surface);border:1px solid var(--red);
+  border-radius:var(--r);padding:24px;width:360px;z-index:1;
+  display:flex;flex-direction:column;gap:14px}
+#delete-box h3{font-size:16px;font-weight:700;color:var(--red)}
+#delete-box p{font-size:14px;color:var(--text);line-height:1.6}
+#delete-box .delete-name{font-weight:700;color:var(--text)}
+.delete-actions{display:flex;gap:8px;justify-content:flex-end}
+#btn-delete-cancel{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+#btn-delete-confirm1{background:#7f1d1d;color:#fca5a5}
+#btn-delete-confirm2{background:var(--red);color:#fff}
+
+/* ── スクロールバー ── */
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+
+<div id="login-overlay">
+  <div id="login-box">
+    <h2>管理画面ログイン</h2>
+    <input type="text" id="login-user" placeholder="ID" autocomplete="username">
+    <input type="password" id="login-pass" placeholder="パスワード" autocomplete="current-password">
+    <div id="login-error"></div>
+    <button id="login-btn">ログイン</button>
+  </div>
+</div>
+
+<header id="app-header">
+  <h1>AIボイスメモ 管理画面</h1>
+  <span id="header-sub">MTG一覧</span>
+  <a href="/ai-voice-memo/"
+    style="margin-left:auto;background:var(--sky);border:1px solid var(--sky);
+    color:#fff;border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;
+    text-decoration:none;font-weight:600">
+    📱 録音画面へ
+  </a>
+  <button id="btn-open-settings" onclick="openApiSettings()"
+    style="margin-left:8px;background:var(--surface2);border:1px solid var(--border);
+    color:var(--text);border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer">
+    ⚙ 設定
+  </button>
+</header>
+
+<div id="layout">
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <h2>MTG一覧</h2>
+      <button class="btn-ghost btn-sm" id="btn-refresh">更新</button>
+    </div>
+    <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+      <a href="/ai-voice-memo/" style="display:block;background:var(--sky);color:#fff;
+        text-align:center;padding:9px;border-radius:8px;font-size:14px;
+        font-weight:700;text-decoration:none">＋ 新規MTGを録音</a>
+    </div>
+    <div id="project-list"><p id="empty-msg">読み込み中…</p></div>
+  </aside>
+
+  <main id="main">
+    <div id="placeholder">
+      <div style="font-size:48px">🎙</div>
+      <div>MTGを選択してください</div>
+    </div>
+
+    <!-- 設定モーダル（APIキー・上限・使用量） -->
+    <div id="settings-modal">
+      <div id="settings-backdrop" onclick="closeApiSettings()"></div>
+      <div id="settings-box">
+        <h3>⚙ 設定</h3>
+
+        <div>
+          <h4>APIキー（現在の登録状態）</h4>
+          <div id="api-keys-list"></div>
+        </div>
+
+        <div>
+          <h4>使用量と上限（今日 / 過去30日）</h4>
+          <div id="usage-list"></div>
+        </div>
+
+        <div>
+          <h4>LLM統合の重み付け（合計10）</h4>
+          <div class="svc-card">
+            <div id="merge-weight-summary" style="text-align:center;font-size:18px;font-weight:700;margin-bottom:12px;letter-spacing:1px">
+              WS <span id="mw-show-ws">2</span> : Run1 <span id="mw-show-r1">4</span> : Run2 <span id="mw-show-r2">4</span>
+            </div>
+            <div class="run-field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--sub);font-weight:600;display:flex;justify-content:space-between">
+                <span>Web Speech</span><span id="mw-val-ws">2</span>
+              </label>
+              <input type="range" id="mw-ws" min="0" max="10" step="1" value="2"
+                     oninput="onMergeWeightChange('ws')"
+                     style="width:100%;accent-color:var(--green)">
+            </div>
+            <div class="run-field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--sub);font-weight:600;display:flex;justify-content:space-between">
+                <span>Run1</span><span id="mw-val-r1">4</span>
+              </label>
+              <input type="range" id="mw-r1" min="0" max="10" step="1" value="4"
+                     oninput="onMergeWeightChange('r1')"
+                     style="width:100%;accent-color:var(--sky)">
+            </div>
+            <div class="run-field" style="margin-bottom:12px">
+              <label style="font-size:12px;color:var(--sub);font-weight:600;display:flex;justify-content:space-between">
+                <span>Run2</span><span id="mw-val-r2">4</span>
+              </label>
+              <input type="range" id="mw-r2" min="0" max="10" step="1" value="4"
+                     oninput="onMergeWeightChange('r2')"
+                     style="width:100%;accent-color:var(--yellow)">
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+              <button type="button" onclick="setMergePreset(1,2,7)"
+                      style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:11px">Run2重視 1:2:7</button>
+              <button type="button" onclick="setMergePreset(2,4,4)"
+                      style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:11px">均等 2:4:4</button>
+              <button type="button" onclick="setMergePreset(7,2,1)"
+                      style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:11px">WS重視 7:2:1</button>
+            </div>
+            <div style="font-size:11px;color:var(--sub);line-height:1.6">
+              重みが大きいソースのテキストをLLMが優先採用。比重 0 のソースは無視。<br>
+              「行の骨組み」は最大重みのソースが担当（行数を決める）。
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-close-row">
+          <button id="btn-settings-close" onclick="closeApiSettings()">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Run設定モーダル -->
+    <div id="run-modal">
+      <div id="run-backdrop" onclick="closeRunModal()"></div>
+      <div id="run-box">
+        <h3 id="run-modal-title">Run設定</h3>
+        <div class="run-field">
+          <label>モデル</label>
+          <select id="run-model" onchange="onRunModelChange()">
+            <option value="whisper-1" data-engine="whisper">Whisper（whisper-1）</option>
+            <option value="nova-3"    data-engine="deepgram">Deepgram（nova-3）</option>
+            <option value="nova-2"    data-engine="deepgram">Deepgram（nova-2）</option>
+          </select>
+        </div>
+        <div class="run-field">
+          <label>言語</label>
+          <select id="run-language">
+            <option value="ja">日本語（ja）</option>
+            <option value="auto">自動判定</option>
+            <option value="en">英語（en）</option>
+          </select>
+        </div>
+        <div class="run-check" id="run-diarize-row">
+          <input type="checkbox" id="run-diarize">
+          <label for="run-diarize">話者分離（Deepgramのみ有効）</label>
+        </div>
+        <div class="run-field">
+          <label>プロンプト・文脈ヒント（任意）</label>
+          <textarea id="run-prompt" placeholder="例：医療現場の会議録音です。参加者：田中医師、山田看護師。専門用語：カルテ、ICU"></textarea>
+        </div>
+        <div class="run-actions">
+          <button id="btn-run-reset" onclick="resetRunSettings()">デフォルトに戻す</button>
+          <button id="btn-run-cancel" onclick="closeRunModal()">キャンセル</button>
+          <button id="btn-run-save" onclick="saveRunSettings()">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 削除確認モーダル -->
+    <div id="delete-modal">
+      <div id="delete-backdrop" onclick="closeDeleteModal()"></div>
+      <div id="delete-box">
+        <h3>⚠ MTGを削除</h3>
+        <p>「<span class="delete-name" id="delete-target-name"></span>」を削除しますか？<br>音声ファイル・文字起こし・解析データがすべて完全に削除されます。</p>
+        <div class="delete-actions">
+          <button id="btn-delete-cancel" onclick="closeDeleteModal()">キャンセル</button>
+          <button id="btn-delete-confirm1" onclick="deleteStep2()">削除する</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="detail">
+      <div id="detail-header">
+        <div>
+          <div id="proj-title" style="font-size:22px;font-weight:700"></div>
+          <div id="proj-sub" style="font-size:13px;color:var(--sub);margin-top:4px;margin-bottom:14px"></div>
+        </div>
+        <button id="btn-gear" onclick="toggleSettings()" title="設定">⚙</button>
+      </div>
+
+      <!-- 設定パネル -->
+      <div id="settings-panel">
+        <h4>MTG設定</h4>
+        <div class="settings-row">
+          <button id="btn-rename" class="btn-sm" onclick="renameMtg()">✏ MTG名を変更</button>
+          <button id="btn-delete" class="btn-sm" onclick="deleteStep1()">🗑 このMTGを削除</button>
+        </div>
+      </div>
+
+      <!-- アクションバー -->
+      <div class="action-bar">
+        <span class="run-label">Run1</span>
+        <button class="run-cog" onclick="openRunModal(1)" title="Run1 設定">⚙</button>
+        <button id="btn-run1" class="btn-sky">解析実行</button>
+        <span class="run-label">Run2</span>
+        <button class="run-cog" onclick="openRunModal(2)" title="Run2 設定">⚙</button>
+        <button id="btn-run2" class="btn-sky">解析実行</button>
+        <div class="action-divider"></div>
+        <select id="model-select">
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash（推奨）</option>
+          <option value="gemini-2.5-pro">Gemini 2.5 Pro（高品質）</option>
+        </select>
+        <button id="btn-merge" class="btn-purple">LLM 最終版を生成</button>
+        <div class="action-divider"></div>
+        <button id="btn-copy-all" class="btn-ghost">全文コピー</button>
+      </div>
+      <div id="poll-status" style="display:none"></div>
+
+      <!-- ★ LLM最終版 -->
+      <div id="merged-section" style="display:none">
+        <h3>★ LLM最終版トランスクリプト <span id="merged-model" style="font-size:12px;font-weight:400;color:var(--sub)"></span></h3>
+        <div id="merged-body"></div>
+        <div id="notes-summary" style="display:none">
+          <h4>⚠ 要確認リスト</h4>
+          <div id="notes-body"></div>
+        </div>
+        <div id="summary-section" style="display:none">
+          <h4>📝 要約</h4>
+          <div id="summary-body"></div>
+        </div>
+        <div id="tasks-section" style="display:none">
+          <h4>✅ 残タスク</h4>
+          <ul id="tasks-list"></ul>
+        </div>
+      </div>
+
+      <!-- Q&A -->
+      <div id="qa-section" style="display:none">
+        <h3>💬 文字起こしへの質問</h3>
+        <div id="qa-history"></div>
+        <div class="qa-input-wrap">
+          <textarea id="qa-input" placeholder="例：要点を3つにまとめて / 〇〇さんの発言だけ抜き出して / 次回までにすべきことは？"></textarea>
+          <button id="btn-ask">質問する</button>
+        </div>
+      </div>
+
+      <!-- 音声プレイヤー -->
+      <div class="section">
+        <div class="section-header" onclick="toggleSection('audio')">
+          <h3>録音音声</h3><span class="section-toggle" id="toggle-audio">▼</span>
+        </div>
+        <div id="section-audio" class="section-body">
+          <div id="audio-players"></div>
+        </div>
+      </div>
+
+      <!-- AssemblyAI runs -->
+      <div class="section">
+        <div class="section-header" onclick="toggleSection('aai')">
+          <h3>Whisper 解析結果</h3><span class="section-toggle" id="toggle-aai">▼</span>
+        </div>
+        <div id="section-aai" class="section-body">
+          <div class="runs-grid">
+            <div class="run-block" id="run1-block">
+              <h4>Run1：言語自動検出</h4>
+              <div id="run1-body"><span style="color:var(--sub);font-size:13px">未解析</span></div>
+            </div>
+            <div class="run-block" id="run2-block">
+              <h4>Run2：日本語固定＋話者数ヒント</h4>
+              <div id="run2-body"><span style="color:var(--sub);font-size:13px">未解析</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 参考データ -->
+      <div class="section">
+        <div class="section-header" onclick="toggleSection('ref')">
+          <h3>参考データ（Web Speech + 話者ボタン）</h3><span class="section-toggle" id="toggle-ref">▼</span>
+        </div>
+        <div id="section-ref" class="section-body">
+          <div id="ref-area"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const API = '';
+let currentProjectId = null;
+let pollTimer = null;
+let authHeader = sessionStorage.getItem('admin_auth') || '';
+const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
+
+function speakerColor(idx) {
+  return idx != null ? SPEAKER_COLORS[idx % SPEAKER_COLORS.length] : '#555';
+}
+function escHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fixJa(str) {
+  if (!str) return '';
+  return str.replace(/([^\x00-\x7F])\s+([^\x00-\x7F])/g, '$1$2')
+            .replace(/([^\x00-\x7F])\s+([^\x00-\x7F])/g, '$1$2');
+}
+function formatDate(iso) {
+  try {
+    return new Date(iso).toLocaleString('ja-JP',
+      {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  } catch { return iso; }
+}
+function apiFetch(path, opts = {}) {
+  return fetch(API + path, {
+    ...opts,
+    headers: {'Authorization': authHeader, ...(opts.headers || {})},
+  });
+}
+
+function statusBadge(status) {
+  const map = {
+    uploaded:        ['未解析',       's-uploaded'],
+    analyzing_run1:  ['Run1解析中',   's-analyzing_run1'],
+    analyzing_run2:  ['Run2解析中',   's-analyzing_run2'],
+    completed_run1:  ['Run1完了',     's-completed_run1'],
+    completed_run2:  ['Run2完了',     's-completed_run2'],
+    merged:          ['LLM最終版済',  's-merged'],
+    error:           ['エラー',       's-error'],
+  };
+  const [label, cls] = map[status] || [status, ''];
+  return `<span class="proj-status ${cls}">${label}</span>`;
+}
+
+// ── セクション折りたたみ ──
+function toggleSection(key) {
+  const body    = document.getElementById(`section-${key}`);
+  const toggle  = document.getElementById(`toggle-${key}`);
+  const isOpen  = !body.classList.contains('collapsed');
+  body.classList.toggle('collapsed', isOpen);
+  toggle.textContent = isOpen ? '▶' : '▼';
+}
+
+// ── ログイン ──
+async function tryLogin() {
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  if (!user || !pass) return;
+  const cred = 'Basic ' + btoa(user + ':' + pass);
+  const res = await fetch(`${API}/api/projects`, {headers: {'Authorization': cred}});
+  if (res.status === 401) {
+    document.getElementById('login-error').textContent = 'IDまたはパスワードが違います';
+    return;
+  }
+  authHeader = cred;
+  sessionStorage.setItem('admin_auth', cred);
+  document.getElementById('login-overlay').classList.add('hidden');
+  loadProjects();
+}
+document.getElementById('login-btn').addEventListener('click', tryLogin);
+document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+if (authHeader) document.getElementById('login-overlay').classList.add('hidden');
+
+// ── プロジェクト一覧 ──
+async function loadProjects() {
+  const list = document.getElementById('project-list');
+  try {
+    const res = await apiFetch('/api/projects');
+    if (res.status === 401) { list.innerHTML = '<p id="empty-msg">認証エラー</p>'; return; }
+    const projects = await res.json();
+    if (!projects.length) { list.innerHTML = '<p id="empty-msg">録音データがありません</p>'; return; }
+    list.innerHTML = '';
+    projects.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'proj-item' + (p.id === currentProjectId ? ' active' : '');
+      div.dataset.id = p.id;
+      const names = (p.pnames || '').split(',').filter(Boolean).join('・') || '（参加者なし）';
+      div.innerHTML = `<div class="proj-name">${escHtml(formatDate(p.created_at))}</div>
+        <div class="proj-meta">${escHtml(names)}</div>${statusBadge(p.status)}`;
+      div.addEventListener('click', () => selectProject(p.id));
+      list.appendChild(div);
+    });
+  } catch(e) {
+    list.innerHTML = `<p id="empty-msg">読み込み失敗</p>`;
+  }
+}
+
+// ── プロジェクト詳細 ──
+async function selectProject(id) {
+  currentProjectId = id;
+  stopPoll();
+  document.querySelectorAll('.proj-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.id === id));
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('detail').classList.add('show');
+  document.getElementById('poll-status').style.display = 'none';
+
+  try {
+    const res = await apiFetch(`/api/projects/${id}`);
+    renderDetail(await res.json());
+  } catch(e) { alert('詳細取得失敗: ' + e.message); }
+}
+
+function renderDetail(p) {
+  const names = p.participants.map(pt => pt.name || `話者${pt.idx+1}`).join('・') || '（参加者なし）';
+  document.getElementById('proj-title').textContent = formatDate(p.created_at);
+  document.getElementById('proj-sub').innerHTML = `${escHtml(names)}&nbsp;&nbsp;${statusBadge(p.status)}`;
+
+  // ボタン状態
+  const run1Done    = p.transcripts.some(t => t.run_number === 1 && t.status === 'completed');
+  const run2Done    = p.transcripts.some(t => t.run_number === 2 && t.status === 'completed');
+  const run1Running = p.status === 'analyzing_run1';
+  const run2Running = p.status === 'analyzing_run2';
+
+  const btnR1 = document.getElementById('btn-run1');
+  const btnR2 = document.getElementById('btn-run2');
+  const btnMerge = document.getElementById('btn-merge');
+  btnR1.disabled = run1Running;
+  btnR1.textContent = run1Running ? '解析中…' : (run1Done ? '再解析 Run1' : '解析実行');
+  btnR2.disabled = run2Running;
+  btnR2.textContent = run2Running ? '解析中…' : (run2Done ? '再解析 Run2' : '解析実行');
+  btnMerge.disabled = !run1Done && !run2Done;
+  btnMerge.textContent = p.merged ? 'LLM 再生成' : 'LLM 最終版を生成';
+  btnMerge.dataset.id = p.id;
+
+  // 音声プレイヤー
+  const audioWrap = document.getElementById('audio-players');
+  audioWrap.innerHTML = '';
+  p.recordings.forEach(rec => {
+    const div = document.createElement('div');
+    div.className = 'audio-item';
+    const label = document.createElement('label');
+    label.textContent = `録音${rec.seq + 1}`;
+    div.appendChild(label);
+    apiFetch(`/api/audio/${p.id}/${rec.seq}`)
+      .then(r => r.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.src = url;
+        div.appendChild(audio);
+        // ダウンロードリンク
+        const dl = document.createElement('a');
+        dl.href = url;
+        dl.download = `rec_${rec.seq + 1}.webm`;
+        dl.textContent = '↓';
+        dl.title = 'webmダウンロード';
+        dl.style.cssText = 'color:var(--sky);font-size:18px;text-decoration:none;flex-shrink:0;padding:0 4px';
+        div.appendChild(dl);
+      });
+    audioWrap.appendChild(div);
+  });
+
+  // AssemblyAI結果（Run1/Run2）
+  renderAaiRuns(p);
+
+  // 参考データ
+  renderRefSegments(p);
+
+  // LLM最終版
+  renderMerged(p);
+  renderQA(p);
+
+  // 解析中ならポーリング開始
+  if (p.status === 'analyzing_run1' || p.status === 'analyzing_run2') startPoll(p.id);
+}
+
+function renderAaiRuns(p) {
+  const nameMap = Object.fromEntries(p.participants.map(pt => [pt.idx, pt.name || `話者${pt.idx+1}`]));
+  [1, 2].forEach(run => {
+    const body = document.getElementById(`run${run}-body`);
+    const txs = p.transcripts.filter(t => t.run_number === run);
+    if (!txs.length) {
+      body.innerHTML = '<span style="color:var(--sub);font-size:13px">未解析</span>';
+      return;
+    }
+    body.innerHTML = '';
+    txs.forEach(tx => {
+      if (tx.status === 'error') {
+        body.innerHTML = `<span style="color:var(--red);font-size:13px">エラー: ${escHtml(tx.error)}</span>`;
+        return;
+      }
+      if (tx.status !== 'completed') {
+        body.innerHTML = '<span style="color:var(--yellow);font-size:13px">解析中…</span>';
+        return;
+      }
+      tx.utterances.forEach(utt => {
+        const spkName = tx.speaker_map[utt.speaker] || `Speaker ${utt.speaker}`;
+        const start = Math.floor((utt.start || 0) / 1000);
+        const mm = String(Math.floor(start/60)).padStart(2,'0');
+        const ss = String(start%60).padStart(2,'0');
+        const div = document.createElement('div');
+        div.className = 'aai-utt';
+        div.style.borderLeftColor = SPEAKER_COLORS[utt.speaker.charCodeAt(0) % SPEAKER_COLORS.length];
+        div.innerHTML = `<div class="aai-utt-top">
+          <span class="aai-speaker">${escHtml(spkName)}</span>
+          <span class="aai-time">${mm}:${ss}</span></div>
+          <div class="aai-text">${escHtml(fixJa(utt.text))}</div>`;
+        body.appendChild(div);
+      });
+    });
+  });
+}
+
+// ── タイムスタンプ MM:SS → ms ──
+function tsToMs(ts) {
+  const p = (ts || '').split(':');
+  try { return (parseInt(p[0]) * 60 + parseInt(p[1])) * 1000; }
+  catch { return -1; }
+}
+
+// ── 内容同一性の比較用正規化（句読点・スペース除去）──
+function normForDiff(text) {
+  if (!text) return '';
+  let t = text.replace(/([^\x00-\x7F])\s+([^\x00-\x7F])/g, '$1$2');
+  t = t.replace(/([^\x00-\x7F])\s+([^\x00-\x7F])/g, '$1$2');
+  t = t.replace(/【要確認[^】]*】/g, '');
+  return t.replace(/[。、！？!?,\.・\s]/g, '');
+}
+
+function renderMerged(p) {
+  const section = document.getElementById('merged-section');
+  if (!p.merged) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  document.getElementById('merged-model').textContent = `[${p.merged.model}]`;
+
+  const body = document.getElementById('merged-body');
+  body.innerHTML = '';
+
+  // ── ソース突合マップ構築 ──
+  const nameMap = Object.fromEntries(
+    p.participants.map(pt => [pt.idx, pt.name || `話者${pt.idx+1}`])
+  );
+
+  // 全ソースを {ms, col, seg, ...} で統一形式に集約
+  const items = [];
+  (p.merged.result || []).forEach(seg => {
+    const spkIdx = p.participants.findIndex(pt => pt.name === seg.speaker);
+    const spkColor = spkIdx >= 0 ? SPEAKER_COLORS[spkIdx % SPEAKER_COLORS.length] : 'var(--purple)';
+    items.push({
+      ms: tsToMs(seg.ts), col: 'llm',
+      seg: {...seg, color: spkColor}
+    });
+  });
+  p.ref_segments.forEach(s => {
+    items.push({
+      ms: tsToMs(s.ts), col: 'ws',
+      seg: {
+        ts: s.ts, text: s.text,
+        speaker: s.speaker_idx != null ? (nameMap[s.speaker_idx] || '') : '',
+        color: s.speaker_idx != null ? SPEAKER_COLORS[s.speaker_idx % SPEAKER_COLORS.length] : 'var(--sub)'
+      }
+    });
+  });
+  p.transcripts.forEach(tx => {
+    if (tx.status !== 'completed') return;
+    const colKey = tx.run_number === 1 ? 'run1' : 'run2';
+    const spkMap = tx.speaker_map || {};
+    (tx.utterances || []).forEach(u => {
+      const startSec = Math.floor((u.start || 0) / 1000);
+      const ts = `${String(Math.floor(startSec/60)).padStart(2,'0')}:${String(startSec%60).padStart(2,'0')}`;
+      items.push({
+        ms: u.start || 0, col: colKey,
+        seg: {
+          ts, text: fixJa(u.text || ''),
+          speaker: spkMap[u.speaker] || `Speaker ${u.speaker || 'A'}`,
+          color: 'var(--sky)'
+        }
+      });
+    });
+  });
+
+  // 時系列ソート
+  items.sort((a, b) => a.ms - b.ms);
+
+  // 2秒窓でグループ化（同一カラムは新行へ）
+  const WINDOW = 2000;
+  const rows = [];
+  for (const item of items) {
+    const last = rows[rows.length - 1];
+    if (last && (item.ms - last._anchorMs) < WINDOW && !last.cells[item.col]) {
+      last.cells[item.col] = item.seg;
+    } else {
+      rows.push({_anchorMs: item.ms, cells: {[item.col]: item.seg}});
+    }
+  }
+
+  // ── テーブルラッパー ──
+  const wrap = document.createElement('div');
+  wrap.className = 'compare-wrap';
+
+  // ヘッダー行（実際に使ったエンジンをラベルに反映）
+  const engineLabel = (run) => {
+    const tx = (p.transcripts || []).find(t => t.run_number === run && t.status === 'completed')
+            || (p.transcripts || []).find(t => t.run_number === run);
+    if (!tx) return `Run${run}`;
+    let eng = (tx.engine || '').toLowerCase();
+    if (!eng && tx.aai_id) eng = String(tx.aai_id).split(':')[0];
+    const name = eng === 'deepgram' ? 'Deepgram' : eng === 'whisper' ? 'Whisper' : (eng || 'ASR');
+    return `${name} ${run}`;
+  };
+  const hdr = document.createElement('div');
+  hdr.className = 'compare-grid';
+  hdr.innerHTML = `
+    <div class="col-header h-llm">★ LLM最終版</div>
+    <div class="col-header h-ws">Web Speech</div>
+    <div class="col-header h-aai">${engineLabel(1)}</div>
+    <div class="col-header h-aai">${engineLabel(2)}</div>
+  `;
+  wrap.appendChild(hdr);
+
+  // データ行（タイムライン軸）
+  const grid = document.createElement('div');
+  grid.className = 'compare-grid';
+
+  function buildCell(seg, col, normLlm) {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell';
+    if (!seg) {
+      cell.innerHTML = '<span class="cell-empty">—</span>';
+      return cell;
+    }
+    // LLMとの差分判定（LLM列以外）
+    if (col !== 'llm' && normLlm) {
+      if (normForDiff(seg.text) !== normLlm) cell.classList.add('cell-diff');
+    }
+    const tsHtml = seg.ts ? `<span class="cell-ts">${escHtml(seg.ts)}</span>` : '';
+    const noteHtml = seg.note ? `<span class="cell-note-tag">⚠ ${escHtml(seg.note)}</span>` : '';
+    cell.innerHTML = `
+      <div class="cell-meta">
+        <span class="cell-speaker" style="color:${seg.color || 'var(--sub)'}">${escHtml(seg.speaker || '')}</span>
+        ${tsHtml}
+      </div>
+      <div class="cell-body">${escHtml(seg.text || '')}</div>
+      ${noteHtml}`;
+    return cell;
+  }
+
+  rows.forEach(row => {
+    const normLlm = row.cells.llm ? normForDiff(row.cells.llm.text) : null;
+    grid.appendChild(buildCell(row.cells.llm,  'llm',  normLlm));
+    grid.appendChild(buildCell(row.cells.ws,   'ws',   normLlm));
+    grid.appendChild(buildCell(row.cells.run1, 'run1', normLlm));
+    grid.appendChild(buildCell(row.cells.run2, 'run2', normLlm));
+  });
+
+  wrap.appendChild(grid);
+  body.appendChild(wrap);
+
+  // 要確認リスト
+  const notesSummary = document.getElementById('notes-summary');
+  const notesBody = document.getElementById('notes-body');
+  const notes = (p.merged.notes || []).filter(n => n.note);
+  if (notes.length) {
+    notesSummary.style.display = 'block';
+    notesBody.innerHTML = notes.map(n =>
+      `<div class="note-item">${escHtml(n.ts)} [${escHtml(n.speaker)}] ${escHtml(n.note)}</div>`
+    ).join('');
+  } else {
+    notesSummary.style.display = 'none';
+  }
+
+  // 要約
+  const summarySec  = document.getElementById('summary-section');
+  const summaryBody = document.getElementById('summary-body');
+  if (p.merged.summary) {
+    summarySec.style.display = 'block';
+    summaryBody.textContent  = p.merged.summary;
+  } else {
+    summarySec.style.display = 'none';
+  }
+
+  // 残タスク
+  const tasksSec  = document.getElementById('tasks-section');
+  const tasksList = document.getElementById('tasks-list');
+  const tasks = p.merged.tasks || [];
+  if (p.merged.summary || tasks.length) {  // 要約があればtasksも表示
+    tasksSec.style.display = 'block';
+    if (tasks.length) {
+      tasksList.classList.remove('empty');
+      tasksList.innerHTML = tasks.map(t => `<li>${escHtml(t)}</li>`).join('');
+    } else {
+      tasksList.classList.add('empty');
+      tasksList.innerHTML = '<li>残タスクは検出されませんでした</li>';
+    }
+  } else {
+    tasksSec.style.display = 'none';
+  }
+}
+
+// ── Q&A表示 ──
+function renderQA(p) {
+  const qaSec = document.getElementById('qa-section');
+  if (!p.merged) { qaSec.style.display = 'none'; return; }
+  qaSec.style.display = 'block';
+
+  const history = document.getElementById('qa-history');
+  const qa = p.qa || [];
+  if (!qa.length) {
+    history.innerHTML = '<p style="color:var(--sub);font-size:13px">まだ質問はありません。下の入力欄から質問できます。</p>';
+    return;
+  }
+  history.innerHTML = qa.map(item => `
+    <div class="qa-pair">
+      <div class="qa-q">${escHtml(item.question)}</div>
+      <div class="qa-a">${escHtml(item.answer)}</div>
+      <div class="qa-time">${escHtml(formatDate(item.created_at))}</div>
+    </div>
+  `).join('');
+  history.scrollTop = history.scrollHeight;
+}
+
+function renderRefSegments(p) {
+  const area = document.getElementById('ref-area');
+  const nameMap = Object.fromEntries(p.participants.map(pt => [pt.idx, pt.name || `話者${pt.idx+1}`]));
+  if (!p.ref_segments.length) {
+    area.innerHTML = '<p style="color:var(--sub);font-size:13px">参考データなし</p>'; return;
+  }
+  area.innerHTML = '';
+  p.ref_segments.forEach(seg => {
+    const name  = seg.speaker_idx != null ? (nameMap[seg.speaker_idx] || `話者${seg.speaker_idx+1}`) : '';
+    const color = seg.speaker_idx != null ? speakerColor(seg.speaker_idx) : 'var(--sub)';
+    const div = document.createElement('div');
+    div.className = 'ref-seg';
+    div.innerHTML = `<span class="ref-ts">${escHtml(seg.ts)}</span>
+      <span class="ref-speaker" style="color:${color}">${escHtml(name)}</span>
+      <span class="ref-text">${escHtml(seg.text)}${seg.highlight ? ' ★' : ''}</span>`;
+    area.appendChild(div);
+  });
+}
+
+// ── 設定モーダル ──
+const SVC_LABELS = {
+  'whisper':      {name:'OpenAI Whisper',  short:'分'},
+  'deepgram':     {name:'Deepgram',         short:'分'},
+  'gemini-flash': {name:'Gemini 2.5 Flash', short:'req'},
+  'gemini-pro':   {name:'Gemini 2.5 Pro',   short:'req'},
+};
+
+// ── LLM突合設定（localStorage） ──
+function getMergeSettings() {
+  const ws = parseInt(localStorage.getItem('merge_w_ws')   ?? '2', 10);
+  const r1 = parseInt(localStorage.getItem('merge_w_run1') ?? '4', 10);
+  const r2 = parseInt(localStorage.getItem('merge_w_run2') ?? '4', 10);
+  return { w_ws: ws, w_run1: r1, w_run2: r2 };
+}
+function saveMergeWeights(ws, r1, r2) {
+  localStorage.setItem('merge_w_ws',   String(ws));
+  localStorage.setItem('merge_w_run1', String(r1));
+  localStorage.setItem('merge_w_run2', String(r2));
+}
+function _renderMergeSliders(ws, r1, r2) {
+  document.getElementById('mw-ws').value = ws;
+  document.getElementById('mw-r1').value = r1;
+  document.getElementById('mw-r2').value = r2;
+  document.getElementById('mw-val-ws').textContent = ws;
+  document.getElementById('mw-val-r1').textContent = r1;
+  document.getElementById('mw-val-r2').textContent = r2;
+  document.getElementById('mw-show-ws').textContent = ws;
+  document.getElementById('mw-show-r1').textContent = r1;
+  document.getElementById('mw-show-r2').textContent = r2;
+}
+function onMergeWeightChange(changedKey) {
+  let ws = parseInt(document.getElementById('mw-ws').value, 10);
+  let r1 = parseInt(document.getElementById('mw-r1').value, 10);
+  let r2 = parseInt(document.getElementById('mw-r2').value, 10);
+  // 変更した値以外の合計が (10 - changed) になるよう比例配分
+  const keys = {ws, r1, r2};
+  const others = ['ws','r1','r2'].filter(k => k !== changedKey);
+  const remain = 10 - keys[changedKey];
+  let a = keys[others[0]], b = keys[others[1]];
+  const sumAB = a + b;
+  if (remain < 0) {
+    keys[changedKey] = 10; a = 0; b = 0;
+  } else if (sumAB === 0) {
+    a = Math.floor(remain / 2);
+    b = remain - a;
+  } else {
+    a = Math.round(a * remain / sumAB);
+    b = remain - a;
+    if (b < 0) { a += b; b = 0; }
+  }
+  keys[others[0]] = a; keys[others[1]] = b;
+  ws = keys.ws; r1 = keys.r1; r2 = keys.r2;
+  _renderMergeSliders(ws, r1, r2);
+  saveMergeWeights(ws, r1, r2);
+}
+function setMergePreset(ws, r1, r2) {
+  _renderMergeSliders(ws, r1, r2);
+  saveMergeWeights(ws, r1, r2);
+}
+function loadMergeSettingsUI() {
+  const s = getMergeSettings();
+  _renderMergeSliders(s.w_ws, s.w_run1, s.w_run2);
+}
+
+async function openApiSettings() {
+  document.getElementById('settings-modal').classList.add('show');
+  document.body.classList.add('modal-open');
+  document.getElementById('api-keys-list').innerHTML = '<p style="color:var(--sub);font-size:13px">読み込み中…</p>';
+  document.getElementById('usage-list').innerHTML = '';
+  loadMergeSettingsUI();
+  try {
+    const res = await apiFetch('/api/settings');
+    if (!res.ok) throw new Error(await res.text());
+    const d = await res.json();
+    renderApiKeys(d.keys);
+    renderUsage(d.usage);
+  } catch(e) {
+    document.getElementById('api-keys-list').innerHTML =
+      `<p style="color:var(--red);font-size:13px">読み込み失敗: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function closeApiSettings() {
+  document.getElementById('settings-modal').classList.remove('show');
+  document.body.classList.remove('modal-open');
+}
+
+function renderApiKeys(keys) {
+  const wrap = document.getElementById('api-keys-list');
+  wrap.innerHTML = '';
+  const showOrder = ['whisper','deepgram','gemini-flash'];
+  // 編集用 key名（バックエンドAPIに送るキー）
+  const editKeyMap = {'whisper':'whisper','deepgram':'deepgram','gemini-flash':'gemini'};
+  showOrder.forEach(svc => {
+    const k = keys[svc];
+    const label = svc === 'gemini-flash' ? 'Google Gemini' : SVC_LABELS[svc].name;
+    const editKey = editKeyMap[svc];
+    const div = document.createElement('div');
+    div.className = 'svc-card';
+    div.dataset.editKey = editKey;
+    div.innerHTML = `
+      <div class="svc-card-header">
+        <div>
+          <div class="svc-name">${escHtml(label)}</div>
+          <div class="svc-tier">${k.configured ? '設定済み' : '<span style="color:var(--red)">未設定</span>'}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div class="svc-key ${k.configured?'':'unset'}" data-display>${escHtml(k.masked || '(未設定)')}</div>
+          <button class="key-edit-btn" onclick="toggleKeyEdit('${editKey}')"
+            style="background:var(--surface);border:1px solid var(--border);color:var(--sub);
+            border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer">✏ 編集</button>
+        </div>
+      </div>
+      <div class="key-edit-form" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <input type="text" class="key-input" placeholder="新しいAPIキーを貼り付け"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);
+          border-radius:6px;color:var(--text);font-size:12px;padding:8px 10px;
+          font-family:monospace">
+        <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">
+          <button onclick="cancelKeyEdit('${editKey}')"
+            style="background:var(--surface2);color:var(--text);border:1px solid var(--border);
+            border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer">キャンセル</button>
+          <button onclick="saveKeyEdit('${editKey}')"
+            style="background:var(--sky);color:#fff;border:none;
+            border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">保存</button>
+        </div>
+      </div>
+    `;
+    wrap.appendChild(div);
+  });
+}
+
+// ── キー編集 ──
+function toggleKeyEdit(editKey) {
+  const card = document.querySelector(`.svc-card[data-edit-key="${editKey}"]`);
+  if (!card) return;
+  const form = card.querySelector('.key-edit-form');
+  const isOpen = form.style.display !== 'none';
+  form.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) {
+    card.querySelector('.key-input').focus();
+  }
+}
+
+function cancelKeyEdit(editKey) {
+  const card = document.querySelector(`.svc-card[data-edit-key="${editKey}"]`);
+  if (!card) return;
+  card.querySelector('.key-input').value = '';
+  card.querySelector('.key-edit-form').style.display = 'none';
+}
+
+async function saveKeyEdit(editKey) {
+  const card = document.querySelector(`.svc-card[data-edit-key="${editKey}"]`);
+  if (!card) return;
+  const input = card.querySelector('.key-input');
+  const newKey = input.value.trim();
+  if (!newKey) return;
+  if (newKey.startsWith('*')) {
+    alert('マスク表示そのまま貼り付けられています。実際のAPIキーを入力してください');
+    return;
+  }
+  const btns = card.querySelectorAll('.key-edit-form button');
+  btns.forEach(b => b.disabled = true);
+  try {
+    const res = await apiFetch('/api/settings/keys', {
+      method: 'PATCH',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({[editKey]: newKey}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    // 再読込
+    const r = await apiFetch('/api/settings');
+    if (r.ok) {
+      const d = await r.json();
+      renderApiKeys(d.keys);
+      renderUsage(d.usage);
+    }
+    alert(`${editKey} のキーを更新しました`);
+  } catch(e) {
+    alert('更新失敗: ' + e.message);
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+function renderUsage(usage) {
+  const wrap = document.getElementById('usage-list');
+  wrap.innerHTML = '';
+  Object.entries(usage).forEach(([svc, u]) => {
+    const meta  = SVC_LABELS[svc] || {name:svc};
+    const lims  = u.limits || {};
+    const daily = u.daily;
+    const monthly = u.monthly;
+
+    const rows = [];
+    if (lims.daily_minutes) {
+      rows.push(usageBar('今日', daily.minutes, lims.daily_minutes, '分', 1));
+    }
+    if (lims.monthly_minutes) {
+      rows.push(usageBar('過去30日', monthly.minutes, lims.monthly_minutes, '分', 1));
+    }
+    if (lims.daily_requests) {
+      rows.push(usageBar('今日', daily.requests, lims.daily_requests, 'req', 0));
+    }
+    if (lims.daily_tokens) {
+      rows.push(usageBar('今日tokens', daily.tokens, lims.daily_tokens, 'tok', 0));
+    }
+
+    const totalCost = (daily.cost_usd || 0) + (monthly.cost_usd || 0);
+    const div = document.createElement('div');
+    div.className = 'svc-card';
+    const officialBtn = svc === 'deepgram' ? `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <button onclick="fetchDeepgramOfficial()"
+          style="background:var(--surface);color:var(--sky);border:1px solid var(--sky);
+            border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer">
+          📊 Deepgram公式集計を取得
+        </button>
+        <div id="deepgram-official" style="display:none;margin-top:10px"></div>
+      </div>
+    ` : '';
+
+    div.innerHTML = `
+      <div class="svc-card-header">
+        <div>
+          <div class="svc-name">${escHtml(meta.name)}</div>
+          <div class="svc-tier">${escHtml(lims.free_tier_note || '')}</div>
+        </div>
+      </div>
+      ${rows.join('')}
+      <div class="svc-cost">累計推定コスト: $${monthly.cost_usd.toFixed(4)}</div>
+      ${officialBtn}
+    `;
+    wrap.appendChild(div);
+  });
+}
+
+// ── Deepgram公式集計を取得＋カード更新 ──
+async function fetchDeepgramOfficial() {
+  const box = document.getElementById('deepgram-official');
+  box.style.display = 'block';
+  box.innerHTML = '<p style="color:var(--sub);font-size:13px">取得中…</p>';
+  try {
+    const r = await apiFetch('/api/deepgram-stats?days=30');
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+
+    const today = new Date().toISOString().slice(0, 10);
+    const results = (d.usage && d.usage.results) || [];
+    const totalHours = results.reduce((a, x) => a + (x.hours || 0), 0);
+    const todayHours = results
+      .filter(x => x.grouping && x.grouping.start === today)
+      .reduce((a, x) => a + (x.hours || 0), 0);
+    const totalMinutes = totalHours * 60;
+    const todayMinutes = todayHours * 60;
+    const totalReq     = results.reduce((a, x) => a + (x.requests || 0), 0);
+
+    // Deepgramカードのバーを公式値に置換
+    const card = box.closest('.svc-card');
+    if (card) {
+      const rows = card.querySelectorAll('.usage-row');
+      const newDailyBar   = usageBar('今日（公式）',       todayMinutes, 60,  '分', 1);
+      const newMonthlyBar = usageBar('過去30日（公式）',  totalMinutes, 750, '分', 1);
+      if (rows[0]) rows[0].outerHTML = newDailyBar;
+      // outerHTMLで上書きするとrows[1]が無効化されるため、再取得
+      const rows2 = card.querySelectorAll('.usage-row');
+      if (rows2[1]) rows2[1].outerHTML = newMonthlyBar;
+
+      // 推定コストも公式値で更新（$0.0043/分）
+      const officialCost = totalMinutes * 0.0043;
+      const costEl = card.querySelector('.svc-cost');
+      if (costEl) costEl.innerHTML = `公式推定コスト: $${officialCost.toFixed(4)} <span style="color:var(--sub);font-size:11px">（過去30日）</span>`;
+    }
+
+    // 残高表示
+    let balanceHtml = '';
+    if (d.balance && Array.isArray(d.balance.balances) && d.balance.balances[0]) {
+      const bal = d.balance.balances[0];
+      const remain = bal.amount || 0;
+      const used   = 200 - remain;  // $200無料クレジット基準
+      balanceHtml = `
+        <div style="margin-top:6px">
+          残クレジット: <strong>$${remain.toFixed(2)}</strong> / $200
+          <span style="color:var(--sub);font-size:11px">（使用 $${used.toFixed(2)}）</span>
+        </div>`;
+    } else if (d.balance && d.balance.error) {
+      balanceHtml = `<div style="color:var(--sub);font-size:11px;margin-top:6px">残高はAPIキー権限不足で取得不可</div>`;
+    }
+
+    box.innerHTML = `
+      <div style="background:#0d2e1a;border-left:3px solid var(--green);
+        border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6">
+        <div style="font-weight:700;color:var(--green);margin-bottom:6px">
+          📊 Deepgram公式集計（過去30日）
+        </div>
+        <div>使用時間: <strong>${totalHours.toFixed(3)}時間</strong>（${totalMinutes.toFixed(1)}分）</div>
+        <div>リクエスト数: ${totalReq}</div>
+        ${balanceHtml}
+        <div style="font-size:11px;color:var(--sub);margin-top:6px">
+          期間: ${escHtml(d.period.start)} 〜 ${escHtml(d.period.end)}
+        </div>
+      </div>
+    `;
+  } catch(e) {
+    box.innerHTML = `<p style="color:var(--red);font-size:13px">取得失敗: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function usageBar(label, used, limit, unit, decimals) {
+  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  let cls = '';
+  if (pct >= 100) cls = 'danger';
+  else if (pct >= 80) cls = 'warn';
+  const usedDisp = decimals > 0 ? used.toFixed(decimals) : Math.round(used);
+  const remain = Math.max(0, limit - used);
+  const remainDisp = decimals > 0 ? remain.toFixed(decimals) : Math.round(remain);
+  return `
+    <div class="usage-row">
+      <div class="usage-label">${escHtml(label)}</div>
+      <div class="usage-bar-wrap"><div class="usage-bar ${cls}" style="width:${pct}%"></div></div>
+      <div class="usage-text">${usedDisp}/${limit}${unit} <span style="color:var(--sub)">残${remainDisp}</span></div>
+    </div>
+  `;
+}
+
+// ── Run設定（localStorageに保存）──
+const DEFAULT_RUN_SETTINGS = {
+  1: {engine:'whisper',  language:'ja', prompt:'', model:'whisper-1', diarize:false},
+  2: {engine:'deepgram', language:'ja', prompt:'', model:'nova-3',    diarize:true},
+};
+let _editingRun = 1;
+
+function getRunSettings(run) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(`run${run}_settings`) || 'null');
+    return stored || {...DEFAULT_RUN_SETTINGS[run]};
+  } catch { return {...DEFAULT_RUN_SETTINGS[run]}; }
+}
+
+// モデル変更時：エンジンを自動判定し、話者分離の有効/無効を制御
+function onRunModelChange() {
+  const modelSel = document.getElementById('run-model');
+  const opt = modelSel.querySelector(`option[value="${modelSel.value}"]`);
+  const engine = opt ? opt.dataset.engine : 'whisper';
+  const diarize = document.getElementById('run-diarize');
+  const diarizeRow = document.getElementById('run-diarize-row');
+  if (engine !== 'deepgram') {
+    diarize.checked = false;
+    diarize.disabled = true;
+    diarizeRow.style.opacity = '0.4';
+  } else {
+    diarize.disabled = false;
+    diarizeRow.style.opacity = '1';
+  }
+}
+
+function openRunModal(run) {
+  _editingRun = run;
+  const s = getRunSettings(run);
+  document.getElementById('run-modal-title').textContent = `Run${run} 設定`;
+  // モデルから判定（旧エンジン値は無視）
+  let model = s.model;
+  // 過去設定との互換：engineがwhisperでmodelが空ならwhisper-1、deepgramならnova-3
+  if (!model || (s.engine === 'whisper' && !['whisper-1'].includes(model))) {
+    model = s.engine === 'deepgram' ? 'nova-3' : 'whisper-1';
+  }
+  document.getElementById('run-model').value    = model;
+  document.getElementById('run-language').value = s.language || 'ja';
+  document.getElementById('run-diarize').checked= !!s.diarize;
+  document.getElementById('run-prompt').value   = s.prompt || '';
+  onRunModelChange();  // 話者分離の有効/無効を反映
+  document.getElementById('run-modal').classList.add('show');
+}
+
+function closeRunModal() {
+  document.getElementById('run-modal').classList.remove('show');
+}
+
+function saveRunSettings() {
+  const s = {
+    engine:   document.getElementById('run-engine').value,
+    language: document.getElementById('run-language').value,
+    model:    document.getElementById('run-model').value,
+    diarize:  document.getElementById('run-diarize').checked,
+    prompt:   document.getElementById('run-prompt').value.trim(),
+  };
+  localStorage.setItem(`run${_editingRun}_settings`, JSON.stringify(s));
+  closeRunModal();
+}
+
+function resetRunSettings() {
+  localStorage.removeItem(`run${_editingRun}_settings`);
+  openRunModal(_editingRun);  // デフォルトで再描画
+}
+
+// ── Run1/Run2 解析 ──
+async function runAnalyze(run) {
+  const id = currentProjectId;
+  if (!id) return;
+  const btn = document.getElementById(`btn-run${run}`);
+  const settings = getRunSettings(run);
+  btn.disabled = true;
+  btn.textContent = `リクエスト中…（${settings.engine}）`;
+  try {
+    const res = await apiFetch(`/api/projects/${id}/analyze?run=${run}&force=true`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    btn.textContent = '解析中…';
+    startPoll(id);
+    loadProjects();
+  } catch(e) {
+    alert(`Run${run} 解析リクエスト失敗: ${e.message}`);
+    btn.disabled = false;
+    btn.textContent = '解析実行';
+  }
+}
+document.getElementById('btn-run1').addEventListener('click', () => runAnalyze(1));
+document.getElementById('btn-run2').addEventListener('click', () => runAnalyze(2));
+
+// ── LLM突合 ──
+document.getElementById('btn-merge').addEventListener('click', async () => {
+  const id = currentProjectId;
+  if (!id) return;
+  const model = document.getElementById('model-select').value;
+  const btn = document.getElementById('btn-merge');
+  btn.disabled = true;
+  btn.textContent = '生成中… (30〜60秒)';
+  const statusEl = document.getElementById('poll-status');
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--purple)';
+  statusEl.textContent = `LLM（${model}）で統合トランスクリプトを生成中…`;
+  try {
+    const ms = getMergeSettings();
+    const qs = `?model=${encodeURIComponent(model)}`
+             + `&w_ws=${ms.w_ws}&w_run1=${ms.w_run1}&w_run2=${ms.w_run2}`;
+    const res = await apiFetch(`/api/projects/${id}/merge${qs}`, {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const d = await res.json();
+    statusEl.textContent = `生成完了（${d.segments}発言、要確認${d.notes}件）。要約とタスクを抽出中…`;
+
+    // 続けて要約＋タスク抽出
+    try {
+      const r2 = await apiFetch(`/api/projects/${id}/summarize?model=${encodeURIComponent(model)}`, {method: 'POST'});
+      if (r2.ok) {
+        const s = await r2.json();
+        statusEl.textContent = `生成完了（要約${s.summary.length}字・残タスク${s.tasks.length}件）`;
+      } else {
+        statusEl.textContent = `LLM最終版は生成済み。要約抽出は失敗しました`;
+      }
+    } catch(e) {
+      statusEl.textContent = `LLM最終版は生成済み。要約抽出失敗: ${e.message}`;
+    }
+
+    statusEl.style.color = 'var(--purple)';
+    btn.textContent = 'LLM 再生成';
+    btn.disabled = false;
+    await loadProjects();
+    await selectProject(id);
+  } catch(e) {
+    statusEl.textContent = `LLM生成失敗: ${e.message}`;
+    statusEl.style.color = 'var(--red)';
+    btn.disabled = false;
+    btn.textContent = 'LLM 最終版を生成';
+  }
+});
+
+// ── Q&A 質問送信 ──
+document.getElementById('btn-ask').addEventListener('click', async () => {
+  const id = currentProjectId;
+  if (!id) return;
+  const input = document.getElementById('qa-input');
+  const question = input.value.trim();
+  if (!question) return;
+  const model = document.getElementById('model-select').value;
+  const btn = document.getElementById('btn-ask');
+  btn.disabled = true;
+  btn.textContent = '考え中…';
+  try {
+    const res = await apiFetch(`/api/projects/${id}/ask?model=${encodeURIComponent(model)}`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({question}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    input.value = '';
+    await selectProject(id);
+  } catch(e) {
+    alert('質問失敗: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '質問する';
+  }
+});
+
+// Ctrl+Enter or Cmd+Enter で送信
+document.getElementById('qa-input').addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    document.getElementById('btn-ask').click();
+  }
+});
+
+// ── ポーリング ──
+function startPoll(id) {
+  const statusEl = document.getElementById('poll-status');
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--yellow)';
+  statusEl.textContent = '解析中… 自動更新中';
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await apiFetch(`/api/projects/${id}/poll`);
+      const d = await res.json();
+      if (d.pending === 0) {
+        stopPoll();
+        statusEl.textContent = '解析完了';
+        statusEl.style.color = 'var(--green)';
+        await loadProjects();
+        await selectProject(id);
+      }
+    } catch(e) { console.error('poll error', e); }
+  }, 5000);
+}
+function stopPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// ── 全文コピー ──
+document.getElementById('btn-copy-all').addEventListener('click', () => {
+  // LLM最終版テーブルの1列目（LLM列）からコピー
+  const rows = document.querySelectorAll('#merged-body .compare-grid .compare-cell:nth-child(4n+1)');
+  if (rows.length) {
+    const lines = Array.from(rows).map(el => {
+      const spk = el.querySelector('.cell-speaker')?.textContent || '';
+      const ts  = el.querySelector('.cell-ts')?.textContent || '';
+      const txt = el.querySelector('.cell-body')?.textContent || '';
+      return `${ts} [${spk}] ${txt}`;
+    }).join('\n');
+    navigator.clipboard.writeText(lines).then(() => alert('LLM最終版をコピーしました'));
+    return;
+  }
+  const refs = document.querySelectorAll('.ref-seg');
+  if (!refs.length) { alert('コピーするテキストがありません'); return; }
+  const lines = Array.from(refs).map(el => {
+    const ts  = el.querySelector('.ref-ts')?.textContent || '';
+    const spk = el.querySelector('.ref-speaker')?.textContent || '';
+    const txt = el.querySelector('.ref-text')?.textContent || '';
+    return `${ts} ${spk ? '['+spk+'] ' : ''}${txt}`;
+  }).join('\n');
+  navigator.clipboard.writeText(lines).then(() => alert('参考データをコピーしました'));
+});
+
+// ── 歯車設定パネル ──
+function toggleSettings() {
+  document.getElementById('settings-panel').classList.toggle('open');
+}
+function closeSettings() {
+  document.getElementById('settings-panel').classList.remove('open');
+}
+
+// ── MTG名変更 ──
+async function renameMtg() {
+  const id = currentProjectId;
+  if (!id) return;
+  const current = document.getElementById('proj-title').textContent;
+  const newName = prompt('新しいMTG名を入力してください', current);
+  if (!newName || newName.trim() === '') return;
+  try {
+    const res = await apiFetch(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({name: newName.trim()}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    document.getElementById('proj-title').textContent = newName.trim();
+    closeSettings();
+    await loadProjects();
+  } catch(e) {
+    alert('変更失敗: ' + e.message);
+  }
+}
+
+// ── MTG削除（2段階）──
+let _pendingDeleteId = null;
+
+function deleteStep1() {
+  const id = currentProjectId;
+  if (!id) return;
+  _pendingDeleteId = id;
+  const name = document.getElementById('proj-title').textContent;
+  document.getElementById('delete-target-name').textContent = name;
+  // ボタンをStep1状態にリセット
+  const c1 = document.getElementById('btn-delete-confirm1');
+  c1.textContent = '削除する';
+  c1.onclick = deleteStep2;
+  document.getElementById('delete-modal').classList.add('show');
+  closeSettings();
+}
+
+function deleteStep2() {
+  const c1 = document.getElementById('btn-delete-confirm1');
+  // Step2確認に切り替え
+  c1.style.display = 'none';
+  const c2 = document.getElementById('btn-delete-confirm2') || (() => {
+    const b = document.createElement('button');
+    b.id = 'btn-delete-confirm2';
+    b.className = 'btn-sm';
+    b.style.cssText = 'background:var(--red);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:14px;font-weight:700;cursor:pointer';
+    document.querySelector('.delete-actions').appendChild(b);
+    return b;
+  })();
+  c2.textContent = '⚠ 完全に削除する（取り消し不可）';
+  c2.style.display = '';
+  c2.onclick = executeDelete;
+  document.querySelector('#delete-box p').innerHTML =
+    '本当に削除しますか？<br><strong style="color:var(--red)">この操作は取り消しできません。</strong><br>音声・文字起こし・解析データがすべて消えます。';
+}
+
+async function executeDelete() {
+  const id = _pendingDeleteId;
+  if (!id) return;
+  try {
+    const res = await apiFetch(`/api/projects/${id}`, {method: 'DELETE'});
+    if (!res.ok) throw new Error(await res.text());
+    closeDeleteModal();
+    currentProjectId = null;
+    document.getElementById('detail').classList.remove('show');
+    document.getElementById('placeholder').style.display = '';
+    await loadProjects();
+  } catch(e) {
+    alert('削除失敗: ' + e.message);
+  }
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').classList.remove('show');
+  _pendingDeleteId = null;
+  // Step1状態にリセット
+  const c1 = document.getElementById('btn-delete-confirm1');
+  c1.style.display = '';
+  const c2 = document.getElementById('btn-delete-confirm2');
+  if (c2) c2.style.display = 'none';
+  document.querySelector('#delete-box p').innerHTML =
+    '「<span class="delete-name" id="delete-target-name"></span>」を削除しますか？<br>音声ファイル・文字起こし・解析データがすべて完全に削除されます。';
+}
+
+// ── 初期化 ──
+if (authHeader) loadProjects();
+</script>
+</body>
+</html>
