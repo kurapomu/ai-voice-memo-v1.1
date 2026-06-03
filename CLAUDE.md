@@ -60,9 +60,12 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 ## ファイル構成
 
 ### ローカル（このディレクトリ）
-- `index.html` — モバイルPWA全体（VanillaJS・約1000行）
+- `index.html` — モバイルPWA全体（VanillaJS・約1000行）※**正典：これを編集→VPSへscp**
 - `manifest.json` — PWAマニフェスト
-- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）
+- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョン定数 `const CACHE = 'voicememo-vX.Y';`（編集後は必ずインクリメント）
+- `CONCEPT.md` — プロダクト哲学・全体構成の図解ドキュメント（人間向け補足。CLAUDE.mdより詳細な背景）
+- `docs/system-overview.html` — システム概要のHTML版（社外説明用）
+- `_main_remote.py` / `_admin_remote.html` — **VPSから取得した現在の本番コピー（参照専用・編集しない）**。ローカル正典と差分確認するための比較用スナップショット。git追跡外でよい
 
 ### VPS（`root@162.43.14.31`）
 - `/var/www/jizo-dev.com/ai-voice-memo/index.html` — モバイルPWA（↑のコピー）
@@ -209,6 +212,15 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - **配色**：単色のみ・**グラデーション全面禁止**（CLAUDE.md global rule）。WCAG AAコントラスト遵守
 - **APIキーは絶対クライアントに出さない**：すべてVPSの`.env`管理、FastAPIでプロキシ
 - **成果物に個人名・法人名を含めない**
+
+---
+
+## Git ワークフロー
+
+- リポジトリ: `https://github.com/kurapomu/ai-voice-memo-v1.1`（mainブランチのみ運用）
+- **GitHub Pages は無効**。デプロイは VPS への scp が正のため、commit と本番反映は別操作
+- 編集 → ローカル動作確認 → VPS へ scp → `git add/commit/push`（履歴目的）の順
+- `_main_remote.py` / `_admin_remote.html` は本番取得スナップショットのため、原則コミットしない（.gitignore推奨）
 
 ---
 

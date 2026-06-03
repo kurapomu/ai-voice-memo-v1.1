@@ -197,6 +197,21 @@ audio{width:100%;height:40px}
 #qr-box p{font-size:13px;color:#888}
 #qr-box button{background:#242424;color:#888;border:1px solid #2a2a2a;
   border-radius:8px;padding:10px;font-size:14px}
+
+/* ── 設定モーダル ── */
+#settings-modal{display:none;position:fixed;inset:0;z-index:998;align-items:center;justify-content:center}
+#settings-modal.show{display:flex}
+#settings-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.7)}
+#settings-box{position:relative;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;
+  padding:24px;display:flex;flex-direction:column;gap:12px;z-index:1;min-width:280px;max-width:360px}
+#settings-box h3{font-size:16px;font-weight:700;color:#f0f0f0;margin:0 0 4px}
+.settings-btn{background:#242424;color:#f0f0f0;border:1px solid #2a2a2a;border-radius:10px;
+  padding:14px 16px;font-size:16px;text-align:left;cursor:pointer;line-height:1.3}
+.settings-btn:hover{background:#2e2e2e;border-color:#3b82f6}
+.settings-btn:active{opacity:.8}
+.settings-note{font-size:12px;color:#888;margin:4px 0 0;line-height:1.5}
+.settings-close{background:#111;color:#888;border:1px solid #2a2a2a;border-radius:8px;
+  padding:10px;font-size:14px;cursor:pointer;margin-top:4px}
 /* ヘッダー右端ボタン群 */
 .hdr-actions{display:flex;align-items:center;gap:8px}
 .hdr-icon-btn{background:none;border:none;color:#888;font-size:18px;
@@ -229,12 +244,30 @@ audio{width:100%;height:40px}
   </div>
 </div>
 
+<!-- ════ 設定モーダル ════ -->
+<div id="settings-modal">
+  <div id="settings-backdrop" onclick="hideSettings()"></div>
+  <div id="settings-box">
+    <h3>設定</h3>
+    <button class="settings-btn" onclick="openSystemOverview()">📘 システム概要を見る</button>
+    <button class="settings-btn" onclick="openDebugPanel()">🐛 デバッグパネル</button>
+    <button class="settings-btn" onclick="openApiLogs()">📜 APIサーバーログ</button>
+    <p class="settings-note">※ ローカル履歴（IndexedDB）は24時間で自動削除されます</p>
+    <button class="settings-close" onclick="hideSettings()">閉じる</button>
+  </div>
+</div>
+
 <!-- ════ 画面1：セットアップ ════ -->
 <div id="screen-setup" class="screen active">
   <div class="hdr">
     <h1>AIボイスメモ</h1>
     <div class="hdr-actions">
+      <a class="hdr-icon-btn" href="/ai-voice-memo/admin/" title="管理画面へ"
+         style="text-decoration:none;display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:6px 10px">
+        🖥 管理画面
+      </a>
       <button class="hdr-icon-btn" onclick="showQR()" title="QRコード">⊞</button>
+      <button class="hdr-icon-btn" onclick="showSettings()" title="設定">⚙</button>
     </div>
   </div>
   <div id="setup-body">
@@ -326,6 +359,31 @@ audio{width:100%;height:40px}
 const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
 const MAX_REC_MS = 20 * 60 * 1000;  // 1チャンクあたりの最大録音時間 20分
 const DB_NAME = 'VoiceMemo', DB_VER = 1, STORE = 'recordings';
+const TTL_MS = 24 * 60 * 60 * 1000;  // IndexedDB 24時間TTL
+
+// ══════════════════════════════════════
+// デバッグログバッファ（設定モーダルから閲覧）
+// ══════════════════════════════════════
+window.debugBuffer = [];
+function pushDebug(kind, args){
+  try {
+    const msg = Array.from(args).map(a => {
+      if (a instanceof Error) return a.stack || a.message;
+      if (typeof a === 'object') { try { return JSON.stringify(a); } catch(_) { return String(a); } }
+      return String(a);
+    }).join(' ');
+    window.debugBuffer.push({ts: new Date().toLocaleTimeString('ja-JP'), kind, msg});
+    if (window.debugBuffer.length > 2000) window.debugBuffer.splice(0, 1000);
+  } catch(_) {}
+}
+['log','warn','error'].forEach(k => {
+  const orig = console[k].bind(console);
+  console[k] = function(){ pushDebug(k, arguments); orig.apply(console, arguments); };
+});
+function logEvent(msg){ pushDebug('evt', [msg]); }
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // ══════════════════════════════════════
 // 状態
@@ -500,15 +558,20 @@ function createSTT() {
     stop()  { r.stop(); },
   };
   r.onresult = e => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
+    let finalText = '', interimText = '';
+    for (let i = 0; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) api.onResult?.({text: t, isFinal: true});
-      else interim += t;
+      if (e.results[i].isFinal) finalText += t;
+      else interimText += t;
     }
-    if (interim) api.onResult?.({text: interim, isFinal: false});
+    const newFinal = finalText.slice(api._lastFinalLen || 0);
+    if (newFinal) {
+      api._lastFinalLen = finalText.length;
+      api.onResult?.({text: newFinal, isFinal: true});
+    }
+    api.onResult?.({text: interimText, isFinal: false});
   };
-  r.onend  = () => api.onEnd?.();
+  r.onend  = () => { api._lastFinalLen = 0; api.onEnd?.(); };
   r.onerror = e => api.onError?.(e.error);
   return api;
 }
@@ -517,6 +580,7 @@ function createSTT() {
 // 録音開始
 // ══════════════════════════════════════
 async function startRecording() {
+  logEvent('録音開始');
   // マイク取得
   let stream;
   try {
@@ -568,6 +632,7 @@ async function startRecording() {
   state.segments = [];
   state.startTime = Date.now();
   state.chunkStartTime = Date.now();
+  state.lastSttAt = Date.now();
   state.timerInterval = setInterval(updateTimer, 1000);
 
   // レベルバー
@@ -598,9 +663,14 @@ function stopRecording() {
 
   state.mediaRecorder.onstop = () => {
     const mime = state.mediaRecorder.mimeType || 'audio/webm';
-    state.audioBlob = new Blob(state.audioChunks, {type: mime});
-    state.allAudioBlobs.push({blob: state.audioBlob, mime});
-    state.audioUrl = URL.createObjectURL(state.audioBlob);
+    const blob = new Blob(state.audioChunks, {type: mime});
+    if (blob.size > 0) {
+      state.audioBlob = blob;
+      state.allAudioBlobs.push({blob, mime});
+      state.audioUrl = URL.createObjectURL(blob);
+    } else {
+      console.warn('stopRecording: empty chunk skipped');
+    }
     buildResultScreen();
   };
   state.mediaRecorder.stop();
@@ -612,6 +682,7 @@ function stopRecording() {
 // ══════════════════════════════════════
 function pauseRecording() {
   if (!state.isRecording || state.isPaused) return;
+  logEvent('録音一時停止');
   state.isPaused = true;
   state.isRecording = false;
   clearInterval(state.timerInterval);
@@ -623,7 +694,12 @@ function pauseRecording() {
   state.mediaRecorder.onstop = async () => {
     const mime = state.mediaRecorder.mimeType || 'audio/webm';
     const blob = new Blob(state.audioChunks, {type: mime});
-    state.allAudioBlobs.push({blob, mime});
+    if (blob.size > 0) {
+      state.allAudioBlobs.push({blob, mime});
+    } else {
+      console.warn('pauseRecording: empty chunk skipped');
+      toast('録音データなし（チャンクスキップ）', 2000);
+    }
     state.audioChunks = [];
     updateRecUI();
     toast(`一時停止しました（チャンク${state.allAudioBlobs.length}件）`);
@@ -680,6 +756,7 @@ async function resumeRecording() {
     state.isRecording = true;
     if (!state.startTime) state.startTime = Date.now();
     state.chunkStartTime = Date.now();
+    state.lastSttAt = Date.now();
     $('rec-remaining').textContent = '残り 20:00';
     $('rec-remaining').style.color = 'var(--sub)';
     state.timerInterval = setInterval(updateTimer, 1000);
@@ -815,12 +892,14 @@ async function completeAndUpload() {
       speaker_events: state.speakerEvents,  // 話者ボタン押下のタイムスタンプ列
     };
     fd.append('meta', JSON.stringify(meta));
-    state.allAudioBlobs.forEach(({blob}, i) => fd.append('audio', blob, `rec_${i}.webm`));
+    const uploadBlobs = state.allAudioBlobs.filter(({blob}) => blob && blob.size > 0);
+    uploadBlobs.forEach(({blob}, i) => fd.append('audio', blob, `rec_${i}.webm`));
 
     const res = await fetch(`${API_BASE}/api/projects`, {method:'POST', body: fd});
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.uploadedToVps = true;
+    logEvent(`VPSアップロード成功 project_id=${data.project_id} chunks=${state.allAudioBlobs.length}`);
     updateRecStatus();  // ヘッダーバッジを「✓ 送信完了」に更新
     toast(`✅ 完了しました（${state.allAudioBlobs.length}件アップロード）。PCの管理画面で解析・確認してください`, 4000);
     // モバイルは管理画面に遷移しない。録音と話者選択のみ
@@ -831,6 +910,7 @@ async function completeAndUpload() {
   } catch(e) {
     btn.disabled = false;
     btn.textContent = '保存して完了 →';
+    logEvent('VPSアップロード失敗: ' + e.message);
     toast('アップロード失敗: ' + e.message, 3000);
   }
 }
@@ -839,6 +919,7 @@ async function completeAndUpload() {
 // 一時停止/再開トグル
 // ══════════════════════════════════════
 $('btn-stt-restart').addEventListener('click', () => {
+  logEvent('STT手動再起動');
   try { state.stt?.stop(); } catch(e) {}
   setTimeout(() => {
     try { state.stt?.start(); state.lastSttAt = Date.now(); toast('STTを再起動しました'); }
@@ -1141,6 +1222,28 @@ function openDB() {
   });
 }
 
+// 24時間TTL：createdAt が現在から24h超過のレコードを物理削除
+async function purgeExpired() {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    const req = store.getAll();
+    await new Promise((res, rej) => { req.onsuccess = res; req.onerror = rej; });
+    const now = Date.now();
+    let deleted = 0;
+    for (const rec of req.result) {
+      const t = Date.parse(rec.createdAt);
+      if (isFinite(t) && (now - t) > TTL_MS) {
+        store.delete(rec.id);
+        deleted++;
+      }
+    }
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+    if (deleted > 0) logEvent(`期限切れレコード ${deleted} 件を削除`);
+  } catch(e) { console.error('purgeExpired failed:', e); }
+}
+
 // 自動IDB保存（一時停止時・データロスト防止用）
 async function autoSaveToIDB(label = '自動保存') {
   try {
@@ -1204,6 +1307,7 @@ async function saveToIDB() {
 }
 
 async function loadHistory() {
+  await purgeExpired();
   const list = $('history-list');
   list.innerHTML = '';
   try {
@@ -1302,9 +1406,11 @@ async function uploadProject() {
         })),
     };
     fd.append('meta', JSON.stringify(meta));
-    state.allAudioBlobs.forEach(({blob, mime}, i) => {
-      fd.append('audio', blob, `rec_${i}.webm`);
-    });
+    state.allAudioBlobs
+      .filter(({blob}) => blob && blob.size > 0)
+      .forEach(({blob, mime}, i) => {
+        fd.append('audio', blob, `rec_${i}.webm`);
+      });
 
     const res = await fetch(`${API_BASE}/api/projects`, {method: 'POST', body: fd});
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1436,6 +1542,7 @@ function init() {
 
 checkBrowser();
 init();
+purgeExpired();
 
 // ── データロスト防止：ページ離脱警告 ──
 function hasUnsavedData() {
@@ -1483,6 +1590,99 @@ function showQR() {
 }
 function hideQR() {
   document.getElementById('qr-modal').classList.remove('show');
+}
+
+// ══════════════════════════════════════
+// 設定モーダル
+// ══════════════════════════════════════
+function showSettings(){ $('settings-modal').classList.add('show'); }
+function hideSettings(){ $('settings-modal').classList.remove('show'); }
+
+function openSystemOverview(){
+  // docs/ は ai-voice-memo/ の隣に配置
+  const url = (location.pathname.includes('/ai-voice-memo/'))
+    ? '/ai-voice-memo/docs/system-overview.html'
+    : './docs/system-overview.html';
+  window.open(url, '_blank', 'width=1000,height=800');
+}
+
+function openDebugPanel(){
+  const w = window.open('', 'debug-panel', 'width=760,height=640');
+  if (!w) { toast('ポップアップがブロックされました'); return; }
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>デバッグログ</title>
+<style>body{background:#111;color:#f0f0f0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0;padding:12px}
+.row{padding:4px 0;border-bottom:1px solid #222;white-space:pre-wrap;word-break:break-all}
+.log{color:#f0f0f0}.warn{color:#f59e0b}.error{color:#ef4444}.evt{color:#22c55e}
+.ts{color:#666;margin-right:8px}
+h1{font-size:14px;margin:0 0 8px;color:#f0f0f0}
+.bar{display:flex;gap:8px;margin-bottom:8px}
+button{background:#242424;color:#f0f0f0;border:1px solid #2a2a2a;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px}
+</style></head><body>
+<h1>デバッグログ（最新500件・1秒間隔で更新）</h1>
+<div class="bar"><button id="b-clear">クリア</button><button id="b-pause">一時停止</button><span id="cnt" style="color:#888;font-size:12px;align-self:center"></span></div>
+<div id="out"></div></body></html>`);
+  w.document.close();
+  let paused = false;
+  const render = () => {
+    if (paused) return;
+    try {
+      const buf = window.debugBuffer || [];
+      const slice = buf.slice(-500);
+      const out = w.document.getElementById('out');
+      if (!out) return;
+      out.innerHTML = slice.map(r =>
+        `<div class="row ${r.kind}"><span class="ts">${r.ts}</span>${escapeHtml(r.msg)}</div>`
+      ).join('');
+      w.document.getElementById('cnt').textContent = `全 ${buf.length} 件 / 表示 ${slice.length} 件`;
+      w.scrollTo(0, w.document.body.scrollHeight);
+    } catch(_) {}
+  };
+  render();
+  const timer = setInterval(() => {
+    if (w.closed) { clearInterval(timer); return; }
+    render();
+  }, 1000);
+  w.document.getElementById('b-clear').onclick = () => { window.debugBuffer.length = 0; render(); };
+  w.document.getElementById('b-pause').onclick = (e) => {
+    paused = !paused;
+    e.target.textContent = paused ? '再開' : '一時停止';
+  };
+}
+
+async function openApiLogs(){
+  const w = window.open('', 'api-logs', 'width=960,height=720');
+  if (!w) { toast('ポップアップがブロックされました'); return; }
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>APIサーバーログ</title>
+<style>body{background:#111;color:#f0f0f0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0;padding:12px}
+pre{white-space:pre-wrap;word-break:break-all;margin:0}
+.bar{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+button{background:#242424;color:#f0f0f0;border:1px solid #2a2a2a;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px}
+#status{color:#888;font-size:12px;margin:0}
+</style></head><body>
+<div class="bar"><button id="b-reload">再読込</button><label style="color:#888;font-size:12px">行数 <input id="b-lines" type="number" value="500" min="50" max="5000" style="width:80px;background:#1a1a1a;color:#f0f0f0;border:1px solid #2a2a2a;border-radius:4px;padding:4px"></label><p id="status">読み込み中...</p></div>
+<pre id="out"></pre></body></html>`);
+  w.document.close();
+  const fetchLogs = async () => {
+    const status = w.document.getElementById('status');
+    const out = w.document.getElementById('out');
+    const lines = w.document.getElementById('b-lines').value || 500;
+    status.textContent = '読み込み中...';
+    try {
+      const res = await fetch(`${API_BASE}/api/logs?lines=${encodeURIComponent(lines)}`, {
+        headers: {'Authorization': 'Basic ' + btoa('test:test')}
+      });
+      const text = await res.text();
+      status.textContent = `取得完了 HTTP ${res.status} / ${text.length} 文字`;
+      out.textContent = text;
+      w.scrollTo(0, w.document.body.scrollHeight);
+    } catch(e) {
+      status.textContent = 'エラー: ' + e.message;
+    }
+  };
+  w.document.getElementById('b-reload').onclick = fetchLogs;
+  fetchLogs();
 }
 </script>
 </body>

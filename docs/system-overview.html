@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>AIボイスメモ — システム概要</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #FAFAFA;
+    --surface: #FFFFFF;
+    --border: #D4D4D4;
+    --text: #111111;
+    --text-sub: #444444;
+    --text-mute: #6B6B6B;
+    --accent: #1F4FAA;
+    --accent-soft: #E6EDF8;
+    --warn: #B45309;
+    --warn-soft: #FEF3C7;
+    --ok: #1D6B3A;
+    --ok-soft: #DCFCE7;
+    --bad: #9B1C1C;
+    --bad-soft: #FEE2E2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 16px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
+  header.title {
+    border-bottom: 4px solid var(--text);
+    padding-bottom: 16px;
+    margin-bottom: 32px;
+  }
+  header.title h1 { font-size: 32px; margin: 0 0 8px; letter-spacing: 0.02em; }
+  header.title p { margin: 0; color: var(--text-sub); font-size: 16px; }
+  .meta {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .tag {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-sub);
+  }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 28px 28px 32px;
+    margin-bottom: 24px;
+  }
+  section h2 {
+    font-size: 24px;
+    margin: 0 0 16px;
+    padding-left: 12px;
+    border-left: 6px solid var(--accent);
+  }
+  section h3 {
+    font-size: 20px;
+    margin: 28px 0 12px;
+    color: var(--text);
+  }
+  section p { margin: 0 0 12px; color: var(--text-sub); }
+  .lead {
+    background: var(--accent-soft);
+    border-left: 4px solid var(--accent);
+    padding: 16px 20px;
+    border-radius: 4px;
+    font-size: 16px;
+    color: var(--text);
+    margin: 16px 0 24px;
+  }
+  .lead strong { color: var(--accent); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 20px;
+    font-size: 14px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+  tbody tr:nth-child(even) { background: #F5F5F5; }
+  code, .mono {
+    font-family: "SF Mono", Consolas, "Courier New", monospace;
+    background: #F0F0F0;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .mermaid {
+    background: var(--surface);
+    text-align: center;
+    padding: 16px 0;
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .grid3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+  }
+  .card h4 {
+    margin: 0 0 8px;
+    font-size: 16px;
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 4px;
+    display: inline-block;
+  }
+  .card ul { margin: 4px 0 0; padding-left: 20px; font-size: 14px; color: var(--text-sub); }
+  .card li { margin: 4px 0; }
+  .step {
+    background: var(--bg);
+    border-left: 4px solid var(--accent);
+    padding: 14px 18px;
+    margin: 10px 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .step .num {
+    display: inline-block;
+    background: var(--accent);
+    color: #FFFFFF;
+    width: 24px; height: 24px;
+    line-height: 24px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 700;
+    margin-right: 8px;
+  }
+  .step strong { display: inline; }
+  .step p { margin: 6px 0 0 32px; font-size: 14px; }
+  pre.box {
+    background: #1A1A1A;
+    color: #F0F0F0;
+    border-radius: 6px;
+    padding: 16px 18px;
+    font-size: 13px;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  .legend {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .legend span {
+    padding: 4px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+  .legend .l-ws { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+  .legend .l-r1 { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+  .legend .l-r2 { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 24px;
+    margin-bottom: 24px;
+  }
+  .toc ol { margin: 0; padding-left: 24px; columns: 2; font-size: 14px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  footer {
+    text-align: center;
+    color: var(--text-mute);
+    font-size: 12px;
+    margin-top: 40px;
+  }
+  @media print {
+    body { background: #FFFFFF; }
+    section { break-inside: avoid; page-break-inside: avoid; border: 1px solid #999; }
+    .wrap { padding: 16px; }
+  }
+  @media (max-width: 720px) {
+    .grid2, .grid3 { grid-template-columns: 1fr; }
+    .toc ol { columns: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="title">
+    <h1>AIボイスメモ — システム概要</h1>
+    <p>対面録音特化のAIボイスメモPWA / 二段階方式 + 重み付きLLM統合</p>
+    <div class="meta">
+      <span class="tag">Version: jizo-dev.com</span>
+      <span class="tag">Stack: PWA + FastAPI + SQLite</span>
+      <span class="tag">STT: Whisper / Deepgram / Web Speech</span>
+      <span class="tag">LLM: Gemini 2.5 Flash</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#concept">プロダクトの核</a></li>
+      <li><a href="#system">システム全体構成図</a></li>
+      <li><a href="#flow">データフロー・シーケンス</a></li>
+      <li><a href="#stack">技術スタック一覧</a></li>
+      <li><a href="#weighted">重み付き統合アルゴリズム</a></li>
+      <li><a href="#constraints">主要制約</a></li>
+    </ol>
+  </nav>
+
+  <!-- 1. コンセプト -->
+  <section id="concept">
+    <h2>1. プロダクトの核となる哲学</h2>
+    <div class="lead">
+      <strong>「人間がリアルタイムで分かること」と「AIが後処理で分かること」を分業させる。</strong><br>
+      最後にLLMが重み付きで統合 → 役割分担の明確化が品質と運用容易性を両立させる。
+    </div>
+    <table>
+      <thead>
+        <tr><th style="width:18%">軸</th><th style="width:28%">担当</th><th>強み</th><th>弱み</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>誰が話したか</strong></td><td>人間（録音中の話者ボタン押下）</td><td>100%の正確さ・即時判断</td><td>押し忘れ・遅延</td></tr>
+        <tr><td><strong>何を話したか</strong></td><td>AI（Whisper / Deepgram / Web Speech）</td><td>大量データ処理・固有名詞推定</td><td>話者分離は苦手・誤字あり</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 2. システム全体 -->
+  <section id="system">
+    <h2>2. システム全体構成図</h2>
+    <p>モバイルPWA・VPS・外部API・管理画面の4層構成。データは常にVPSのSQLiteと音声ストレージに集約される。</p>
+    <div class="mermaid">
+flowchart TB
+  subgraph Mobile["① モバイル端末（iPhone / Safari PWA）"]
+    M1[MediaRecorder<br/>32kbps webm]
+    M2[Web Speech API<br/>ストリーミング]
+    M3[話者ボタン<br/>押下=真理値]
+    MX[(IndexedDB<br/>ローカル退避)]
+    M1 --- MX
+    M2 --- MX
+    M3 --- MX
+  end
+
+  subgraph VPS["② VPS jizo-dev.com<br/>Nginx + FastAPI + SQLite"]
+    N[Nginx HTTPS]
+    F[FastAPI :8002<br/>systemd: jizo-api]
+    DB[(SQLite<br/>/var/jizo/jizo.db)]
+    AUD[(音声<br/>/var/jizo/audio/*.webm)]
+    ADM[PC管理画面<br/>Basic認証]
+    N --> F
+    F --> DB
+    F --> AUD
+    N --> ADM
+  end
+
+  subgraph STT["③ 文字起こしエンジン"]
+    W[OpenAI Whisper API<br/>whisper-1 / 同期]
+    D[Deepgram API<br/>nova-3 / nova-2<br/>話者分離あり]
+  end
+
+  subgraph LLM["④ LLM統合"]
+    G[Google Gemini API<br/>gemini-2.5-flash / pro<br/>重み付き統合]
+  end
+
+  Mobile -- "multipart POST<br/>音声 + meta JSON" --> N
+  F --> W
+  F --> D
+  F --> G
+  G --> DB
+  ADM -- "Run1/Run2/Merge起動" --> F
+  ADM -- "4カラム比較表示" --> DB
+
+  classDef mobile fill:#E6EDF8,stroke:#1F4FAA,color:#111
+  classDef vps fill:#DCFCE7,stroke:#1D6B3A,color:#111
+  classDef ext fill:#FEF3C7,stroke:#B45309,color:#111
+  class M1,M2,M3,MX mobile
+  class N,F,DB,AUD,ADM vps
+  class W,D,G ext
+    </div>
+  </section>
+
+  <!-- 3. シーケンス -->
+  <section id="flow">
+    <h2>3. データフロー・シーケンス図</h2>
+    <p>録音から最終トランスクリプトまでの時系列。録音中は20分でチャンク分割し、ユーザー確定後にVPSへ一括アップロード。</p>
+    <div class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as ユーザー
+  participant P as PWA<br/>(モバイル)
+  participant V as VPS<br/>(FastAPI)
+  participant S as STTエンジン<br/>(Whisper/Deepgram)
+  participant L as Gemini<br/>(統合LLM)
+  participant A as 管理画面<br/>(PC)
+
+  U->>P: MTG名入力 → 録音開始
+  activate P
+  P->>P: MediaRecorder + Web Speech 同時起動
+  loop 録音中
+    U->>P: 話者ボタン押下
+    P->>P: speaker_events に記録
+    P->>P: WSテキスト + ref_segments蓄積
+    Note over P: 20分で自動pause<br/>続きは新チャンクへ
+  end
+  U->>P: 「保存して完了」
+  P->>V: multipart POST<br/>(全チャンク + meta JSON)
+  deactivate P
+  V->>V: SQLite + /var/jizo/audio へ保存
+
+  U->>A: 管理画面でMTGを開く
+  A->>V: POST /analyze?run=1
+  V->>S: 音声送信（Run1）
+  S-->>V: utterances + speaker_map
+  V->>V: ai_transcripts に保存
+  opt Run2 実行
+    A->>V: POST /analyze?run=2&force=true
+    V->>S: 別エンジン/別モデルで再解析
+    S-->>V: 第二候補
+  end
+
+  U->>A: 重み調整 (WS:Run1:Run2 = 合計10)
+  A->>V: POST /merge?w_ws=2&w_run1=4&w_run2=4
+  V->>V: 骨組み選定 + クラスタ構築 + 話者決定
+  V->>L: 構造化テーブル + 重み比
+  L-->>V: 行ごとのテキスト合成結果
+  V->>V: merged_transcripts に保存
+  V-->>A: 4カラム比較表示
+    </div>
+  </section>
+
+  <!-- 4. 技術スタック -->
+  <section id="stack">
+    <h2>4. 技術スタック一覧</h2>
+    <div class="grid3">
+      <div class="card">
+        <h4>フロントエンド</h4>
+        <ul>
+          <li>Vanilla JavaScript（約1,500行）</li>
+          <li>Service Worker / Manifest</li>
+          <li>MediaRecorder API（webm/opus 32kbps）</li>
+          <li>Web Speech API（ja-JP）</li>
+          <li>IndexedDB（ローカル退避）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>バックエンド</h4>
+        <ul>
+          <li>FastAPI（Python）</li>
+          <li>SQLite（/var/jizo/jizo.db）</li>
+          <li>Nginx + Let's Encrypt</li>
+          <li>systemd: jizo-api（:8002）</li>
+          <li>ファイルローテーション（12h）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>外部API</h4>
+        <ul>
+          <li>OpenAI Whisper API（whisper-1）</li>
+          <li>Deepgram API（nova-3 / nova-2）</li>
+          <li>Google Gemini API（2.5-flash / pro）</li>
+          <li>OpenAI互換エンドポイント経由</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>インフラ</h4>
+        <ul>
+          <li>VPS: Ubuntu 22.04（jizo-dev.com）</li>
+          <li>HTTPS必須（マイク/Speech API要件）</li>
+          <li>GitHub: kurapomu/ai-voice-memo-v1.1</li>
+          <li>PC管理画面: Basic認証</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>データストア</h4>
+        <ul>
+          <li>projects / recordings</li>
+          <li>ref_segments（WS参考）</li>
+          <li>speaker_events（押下記録）</li>
+          <li>ai_transcripts（Run1/Run2）</li>
+          <li>merged_transcripts（統合結果）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>運用ルール</h4>
+        <ul>
+          <li>API Key は VPS .env のみ</li>
+          <li>SW更新時はCACHEバージョン昇格</li>
+          <li>録音20分上限（Whisper 25MB制約）</li>
+          <li>STT無反応20秒で警告バナー</li>
+          <li>グラデーション全面禁止</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 重み付き統合 -->
+  <section id="weighted">
+    <h2>5. 重み付き統合アルゴリズム（独自設計）</h2>
+    <div class="lead">
+      <strong>従来：</strong>LLMに3ソースを丸投げ → 勝手にマージ・省略・偏りが発生。<br>
+      <strong>新設計：</strong>アルゴリズム側で「行構造」「話者」を確定 → LLMはテキスト選択のみに集中。
+    </div>
+
+    <div class="legend">
+      <span class="l-ws">WS = Web Speech API</span>
+      <span class="l-r1">Run1 = 1回目のSTT解析</span>
+      <span class="l-r2">Run2 = 2回目のSTT解析</span>
+    </div>
+
+    <div class="step"><span class="num">1</span><strong>重みから骨組みソースを選定</strong>
+      <p>例：WS=2, Run1=4, Run2=4 → 同点時は <code>run2 &gt; run1 &gt; ws</code> → 骨組み = Run2</p></div>
+
+    <div class="step"><span class="num">2</span><strong>骨組みの全セグメントを行に展開</strong>
+      <p>Run2 が 30 セグメントなら、出力も 30 行で固定。LLMが行数を変えることを構造的に禁止。</p></div>
+
+    <div class="step"><span class="num">3</span><strong>各行に他ソースを「候補」として添える</strong>
+      <p>骨組み行のタイムスタンプから <code>±2秒以内</code> の最近傍を採用。3ソースの候補テーブルが完成。</p></div>
+
+    <div class="step"><span class="num">4</span><strong>話者をアルゴリズムで決定（LLMに任せない）</strong>
+      <p>優先度チェーン：押下イベント±2秒 → 直前継承 → WS ref_segments → 未設定（<code>【要確認:話者】</code> 付記）</p></div>
+
+    <div class="step"><span class="num">5</span><strong>LLMに構造化テーブルと重み比を渡す</strong>
+      <p>指示は「行を追加・削除・マージするな。重み比に従って3候補から選ぶ／合成せよ」。LLMの仕事はテキスト合成のみ → 暴走しない。</p></div>
+
+    <h3>候補テーブルの例（ステップ3の出力）</h3>
+    <pre class="box">行01 [00:02] WS="こんにちは"   Run1="こんにちは"      Run2="こんにちは"
+行02 [00:23] WS="ＤＳＲ"        Run1="DSL"            Run2="DSR について"
+行03 [00:45] WS=(なし)          Run1="今日のアジェ"    Run2="今日のアジェンダは"</pre>
+
+    <h3>重み設定UI（管理画面イメージ）</h3>
+    <pre class="box">┌────────────────────────────────────────┐
+│ LLM統合の重み付け（合計10）             │
+│                                          │
+│   WS  2  :  Run1  4  :  Run2  4         │
+│                                          │
+│ Web Speech ●──────                  2   │
+│ Run1       ────●──                  4   │
+│ Run2       ────●──                  4   │
+│                                          │
+│ [Run2重視 1:2:7] [均等 2:4:4] [WS重視 7:2:1] │
+└────────────────────────────────────────┘</pre>
+    <p style="font-size:14px">スライダー1本を動かすと他2本が比例配分で自動調整（合計10維持）。重み 0 のソースは LLM 入力から完全除外。</p>
+  </section>
+
+  <!-- 6. 制約 -->
+  <section id="constraints">
+    <h2>6. 設計上の重要な制約</h2>
+    <table>
+      <thead><tr><th style="width:38%">制約</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td><code>createSTT()</code> のみ差し替え可</td><td>Web Speech依存を将来切り替えても、UI・録音・IndexedDBに影響を出さない</td></tr>
+        <tr><td>録音20分/チャンク</td><td>Whisper API のファイルサイズ25MB制限</td></tr>
+        <tr><td>HTTPS必須</td><td>Web Speech API とマイクアクセスの要件</td></tr>
+        <tr><td>Basic認証は管理画面のみ</td><td>モバイル側は誰でもアップロード可（軽い運用ポリシー）</td></tr>
+        <tr><td>APIキーは全部VPS側</td><td>クライアント漏洩防止</td></tr>
+        <tr><td>グラデーション全面禁止</td><td>ユーザー指定の絶対ルール</td></tr>
+        <tr><td>STT無反応20秒で警告</td><td>iOS Safari でバックグラウンドStopする問題への対処</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    AIボイスメモ / システム概要資料 — 2026-06-02 生成<br>
+    本ドキュメントは <code>CLAUDE.md</code> および <code>CONCEPT.md</code> を元に作成
+  </footer>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#E6EDF8',
+      primaryTextColor: '#111111',
+      primaryBorderColor: '#1F4FAA',
+      lineColor: '#444444',
+      fontFamily: '-apple-system, "Hiragino Kaku Gothic ProN", sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', useMaxWidth: true },
+    sequence: { useMaxWidth: true, mirrorActors: false }
+  });
+</script>
+</body>
+</html>
