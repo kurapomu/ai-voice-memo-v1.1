@@ -329,6 +329,25 @@ body.modal-open{overflow:hidden}
         text-align:center;padding:9px;border-radius:8px;font-size:14px;
         font-weight:700;text-decoration:none">＋ 新規MTGを録音</a>
     </div>
+
+    <!-- Zoom 取り込み待ちセクション（件数があるときだけ表示） -->
+    <div id="zoom-pending-section" style="display:none;padding:10px 12px;border-bottom:1px solid var(--border);background:rgba(56,189,248,0.06)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <h3 style="font-size:13px;font-weight:700;margin:0;color:var(--text)">
+          Zoom 取り込み待ち
+          <span id="zoom-badge" style="display:inline-block;background:var(--red);color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;margin-left:4px">0</span>
+        </h3>
+        <button onclick="loadZoomPending()" class="btn-ghost btn-sm" style="font-size:11px">更新</button>
+      </div>
+      <div id="zoom-pending-list" style="font-size:12px"></div>
+      <button onclick="openZoomUploadModal()"
+        style="width:100%;margin-top:8px;padding:7px;background:var(--surface2);
+        border:1px solid var(--border);color:var(--text);border-radius:6px;
+        font-size:12px;cursor:pointer">
+        他組織MTGをファイルアップロード
+      </button>
+    </div>
+
     <div id="project-list"><p id="empty-msg">読み込み中…</p></div>
   </aside>
 
@@ -360,6 +379,38 @@ body.modal-open{overflow:hidden}
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
           <button onclick="closeUploadModal()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 16px;font-size:14px;cursor:pointer">キャンセル</button>
           <button id="upload-submit" onclick="submitUpload()" style="background:#22c55e;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer">アップロード</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zoom 手動アップロードモーダル -->
+    <div id="zoom-upload-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center">
+      <div onclick="closeZoomUploadModal()" style="position:absolute;inset:0;background:rgba(0,0,0,.7)"></div>
+      <div style="position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(640px,92vw);max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;z-index:1">
+        <h3 style="font-size:16px;font-weight:700">
+          Zoom 録画ファイルから取り込み
+          <span style="font-size:12px;color:var(--sub);font-weight:400;margin-left:8px">（他組織主催 MTG 用）</span>
+        </h3>
+        <div style="font-size:12px;color:var(--sub);line-height:1.6">
+          Zoom の「参加者ごとの音声ファイル（Separate Audio Files）」を選択してください。<br>
+          ファイル1つ = 話者1人。各ファイルに対して話者名を指定できます。
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">MTG名 <span style="color:var(--red)">*</span></label>
+          <input id="zoom-up-topic" type="text" placeholder="例: 取引先キックオフ 2026-06-04" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;padding:10px 12px">
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">音声ファイル（複数選択可） <span style="color:var(--red)">*</span></label>
+          <input id="zoom-up-files" type="file" multiple accept="audio/*,.m4a,.mp4,.wav,.mp3" onchange="onZoomFilesChange()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;padding:8px">
+        </div>
+        <div id="zoom-up-mapping" style="font-size:12px;display:none">
+          <div style="font-weight:600;color:var(--sub);margin-bottom:6px">話者名（ファイル名から自動推定。必要なら編集してください）</div>
+          <div id="zoom-up-mapping-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+        <div id="zoom-up-status" style="font-size:13px;min-height:20px"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button onclick="closeZoomUploadModal()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 16px;font-size:14px;cursor:pointer">キャンセル</button>
+          <button id="zoom-up-submit" onclick="submitZoomUpload()" style="background:var(--sky);color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer">取り込む</button>
         </div>
       </div>
     </div>
@@ -680,8 +731,174 @@ document.getElementById('login-btn').addEventListener('click', tryLogin);
 document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
 if (authHeader) document.getElementById('login-overlay').classList.add('hidden');
 
+// ── Zoom 取り込み待ち ──
+async function loadZoomPending() {
+  const section = document.getElementById('zoom-pending-section');
+  const list    = document.getElementById('zoom-pending-list');
+  const badge   = document.getElementById('zoom-badge');
+  if (!section) return;
+  try {
+    const res = await apiFetch('/api/zoom/pending');
+    if (!res.ok) {
+      section.style.display = 'none';
+      return;
+    }
+    const data = await res.json();
+    const items = data.pending || [];
+    if (items.length === 0) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'block';
+    badge.textContent = items.length;
+    list.innerHTML = items.map(it => {
+      const stLabel = ({
+        pending_download: 'DL中…',
+        ready:            '取り込み可',
+        error:            'エラー',
+      })[it.status] || it.status;
+      const stColor = it.status === 'error' ? 'var(--red)' :
+                      it.status === 'ready' ? 'var(--sky)' : 'var(--text-sub)';
+      const ts = it.start_time ? formatDate(it.start_time) : '';
+      const buttons = it.status === 'ready'
+        ? `<button onclick="importZoomPending(${it.id})" class="btn-sky btn-sm" style="font-size:11px;padding:3px 8px">取り込む</button>
+           <button onclick="deleteZoomPending(${it.id})" class="btn-ghost btn-sm" style="font-size:11px;padding:3px 8px;margin-left:4px">破棄</button>`
+        : `<button onclick="deleteZoomPending(${it.id})" class="btn-ghost btn-sm" style="font-size:11px;padding:3px 8px">破棄</button>`;
+      return `<div style="padding:6px 0;border-top:1px solid var(--border)">
+        <div style="font-weight:600">${escHtml(it.topic || 'Zoom MTG')}</div>
+        <div style="color:var(--text-sub);font-size:11px;margin:2px 0">
+          ${escHtml(ts)} / ${it.participants.length || 0}人
+          <span style="color:${stColor};font-weight:600;margin-left:4px">${stLabel}</span>
+        </div>
+        ${it.error_message ? `<div style="color:var(--red);font-size:11px;margin:2px 0">${escHtml(it.error_message)}</div>` : ''}
+        <div style="margin-top:4px">${buttons}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('loadZoomPending failed', e);
+    section.style.display = 'none';
+  }
+}
+
+async function importZoomPending(pendingId) {
+  if (!confirm('このZoom MTGを取り込みますか？\n取り込み後、解析（Run1/Run2）は通常通り実行してください。')) return;
+  try {
+    const res = await apiFetch(`/api/zoom/pending/${pendingId}/import`, {method: 'POST'});
+    if (!res.ok) {
+      const err = await res.text();
+      alert(`取り込み失敗: ${err}`);
+      return;
+    }
+    const data = await res.json();
+    await loadZoomPending();
+    await loadProjects();
+    if (data.project_id) selectProject(data.project_id);
+  } catch (e) {
+    alert(`取り込み失敗: ${e.message}`);
+  }
+}
+
+async function deleteZoomPending(pendingId) {
+  if (!confirm('この取り込み待ちを破棄しますか？\n（ダウンロード済み音声ファイルも削除されます）')) return;
+  try {
+    const res = await apiFetch(`/api/zoom/pending/${pendingId}`, {method: 'DELETE'});
+    if (!res.ok) {
+      alert(`破棄失敗: ${await res.text()}`);
+      return;
+    }
+    await loadZoomPending();
+  } catch (e) {
+    alert(`破棄失敗: ${e.message}`);
+  }
+}
+
+// ── Zoom 手動アップロードモーダル ──
+function openZoomUploadModal() {
+  document.getElementById('zoom-up-topic').value = '';
+  document.getElementById('zoom-up-files').value = '';
+  document.getElementById('zoom-up-mapping').style.display = 'none';
+  document.getElementById('zoom-up-mapping-list').innerHTML = '';
+  document.getElementById('zoom-up-status').textContent = '';
+  document.getElementById('zoom-upload-modal').style.display = 'flex';
+}
+
+function closeZoomUploadModal() {
+  document.getElementById('zoom-upload-modal').style.display = 'none';
+}
+
+// ファイル選択時に話者名マッピング欄を生成
+function onZoomFilesChange() {
+  const files = document.getElementById('zoom-up-files').files;
+  const wrap  = document.getElementById('zoom-up-mapping');
+  const list  = document.getElementById('zoom-up-mapping-list');
+  if (!files.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  list.innerHTML = '';
+  Array.from(files).forEach((f, i) => {
+    // 拡張子を除いたファイル名を話者名の初期値に
+    const baseName = f.name.replace(/\.[^.]+$/, '');
+    // Zoom 標準命名 "audio{N}_{Display Name}.m4a" のパターンを抽出
+    const m = baseName.match(/^audio\d+_(.+)$/);
+    const guess = m ? m[1] : baseName;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px';
+    row.innerHTML = `
+      <span style="flex:0 0 50%;font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
+      <span style="color:var(--sub)">→</span>
+      <input type="text" data-zoom-filename="${escHtml(f.name)}" value="${escHtml(guess)}"
+        style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:5px 8px">
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function submitZoomUpload() {
+  const topic = document.getElementById('zoom-up-topic').value.trim();
+  const files = document.getElementById('zoom-up-files').files;
+  const status = document.getElementById('zoom-up-status');
+  const btn   = document.getElementById('zoom-up-submit');
+
+  if (!topic) { status.innerHTML = '<span style="color:var(--red)">MTG名を入力してください</span>'; return; }
+  if (!files.length) { status.innerHTML = '<span style="color:var(--red)">音声ファイルを選択してください</span>'; return; }
+
+  // 話者名マッピングを収集
+  const participants = [];
+  document.querySelectorAll('#zoom-up-mapping-list input[data-zoom-filename]').forEach(inp => {
+    participants.push({
+      filename: inp.dataset.zoomFilename,
+      name:     inp.value.trim() || inp.dataset.zoomFilename.replace(/\.[^.]+$/, ''),
+    });
+  });
+
+  const fd = new FormData();
+  fd.append('meta', JSON.stringify({topic, participants}));
+  Array.from(files).forEach(f => fd.append('files', f));
+
+  btn.disabled = true;
+  status.innerHTML = '<span style="color:var(--sub)">アップロード中…</span>';
+  try {
+    const res = await apiFetch('/api/zoom/upload', {method: 'POST', body: fd});
+    if (!res.ok) {
+      const err = await res.text();
+      status.innerHTML = `<span style="color:var(--red)">失敗: ${escHtml(err)}</span>`;
+      btn.disabled = false;
+      return;
+    }
+    const data = await res.json();
+    closeZoomUploadModal();
+    await loadProjects();
+    if (data.project_id) selectProject(data.project_id);
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">失敗: ${escHtml(e.message)}</span>`;
+    btn.disabled = false;
+  }
+}
+
 // ── プロジェクト一覧 ──
 async function loadProjects() {
+  // Zoom 取り込み待ちも同時に更新
+  loadZoomPending();
+
   const list = document.getElementById('project-list');
   try {
     const res = await apiFetch('/api/projects');
