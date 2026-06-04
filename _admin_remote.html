@@ -300,8 +300,13 @@ body.modal-open{overflow:hidden}
 <header id="app-header">
   <h1>AIボイスメモ 管理画面</h1>
   <span id="header-sub">MTG一覧</span>
+  <button id="btn-open-upload" onclick="openUploadModal()"
+    style="margin-left:auto;background:#22c55e;border:1px solid #22c55e;
+    color:#fff;border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;font-weight:600">
+    ＋ 音声から新規
+  </button>
   <a href="/ai-voice-memo/"
-    style="margin-left:auto;background:var(--sky);border:1px solid var(--sky);
+    style="margin-left:8px;background:var(--sky);border:1px solid var(--sky);
     color:#fff;border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;
     text-decoration:none;font-weight:600">
     📱 録音画面へ
@@ -333,6 +338,32 @@ body.modal-open{overflow:hidden}
       <div>MTGを選択してください</div>
     </div>
 
+    <!-- 音声ファイルアップロードモーダル -->
+    <div id="upload-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center">
+      <div onclick="closeUploadModal()" style="position:absolute;inset:0;background:rgba(0,0,0,.7)"></div>
+      <div style="position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(520px,92vw);max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;z-index:1">
+        <h3 style="font-size:16px;font-weight:700">音声ファイルから新規プロジェクト</h3>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">MTG名 <span style="color:var(--red)">*</span></label>
+          <input id="upload-mtg-name" type="text" placeholder="例: 営業MTG 2026-06-04" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;padding:10px 12px">
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">参加者名（カンマ区切り・任意）</label>
+          <input id="upload-participants" type="text" placeholder="例: 佐藤, 鈴木, 田中" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;padding:10px 12px">
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">音声ファイル <span style="color:var(--red)">*</span></label>
+          <input id="upload-files" type="file" multiple accept="audio/*,.webm,.wav,.mp3,.m4a,.mp4,.ogg,.flac" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;padding:8px">
+          <div id="upload-file-list" style="font-size:12px;color:var(--sub);margin-top:6px;line-height:1.6"></div>
+        </div>
+        <div id="upload-status" style="font-size:13px;min-height:20px"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button onclick="closeUploadModal()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 16px;font-size:14px;cursor:pointer">キャンセル</button>
+          <button id="upload-submit" onclick="submitUpload()" style="background:#22c55e;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer">アップロード</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 設定モーダル（APIキー・上限・使用量） -->
     <div id="settings-modal">
       <div id="settings-backdrop" onclick="closeApiSettings()"></div>
@@ -352,6 +383,23 @@ body.modal-open{overflow:hidden}
         <div>
           <h4>LLM統合の重み付け（合計10）</h4>
           <div class="svc-card">
+            <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px">
+              <div style="font-size:12px;color:var(--sub);font-weight:600;margin-bottom:6px">基準ソース（時間軸・行構成の主軸）</div>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--text)">
+                <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="radio" name="merge-base" value="run1" onchange="onMergeBaseChange(this.value)" checked> <span id="merge-base-label-run1">Run1</span>
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="radio" name="merge-base" value="run2" onchange="onMergeBaseChange(this.value)"> <span id="merge-base-label-run2">Run2</span>
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="radio" name="merge-base" value="ws" onchange="onMergeBaseChange(this.value)"> WebSpeech
+                </label>
+              </div>
+              <div style="font-size:11px;color:var(--sub);margin-top:6px;line-height:1.5">
+                基準ソースのテキストと発話順序を優先採用。他2ソースは下記の重みに従って補完候補として扱う。
+              </div>
+            </div>
             <div id="merge-weight-summary" style="text-align:center;font-size:18px;font-weight:700;margin-bottom:12px;letter-spacing:1px">
               WS <span id="mw-show-ws">2</span> : Run1 <span id="mw-show-r1">4</span> : Run2 <span id="mw-show-r2">4</span>
             </div>
@@ -487,6 +535,16 @@ body.modal-open{overflow:hidden}
       </div>
       <div id="poll-status" style="display:none"></div>
 
+      <!-- 音声プレイヤー（LLM最終版より上に配置） -->
+      <div class="section">
+        <div class="section-header" onclick="toggleSection('audio')">
+          <h3>録音音声</h3><span class="section-toggle" id="toggle-audio">▼</span>
+        </div>
+        <div id="section-audio" class="section-body">
+          <div id="audio-players"></div>
+        </div>
+      </div>
+
       <!-- ★ LLM最終版 -->
       <div id="merged-section" style="display:none">
         <h3>★ LLM最終版トランスクリプト <span id="merged-model" style="font-size:12px;font-weight:400;color:var(--sub)"></span></h3>
@@ -512,16 +570,6 @@ body.modal-open{overflow:hidden}
         <div class="qa-input-wrap">
           <textarea id="qa-input" placeholder="例：要点を3つにまとめて / 〇〇さんの発言だけ抜き出して / 次回までにすべきことは？"></textarea>
           <button id="btn-ask">質問する</button>
-        </div>
-      </div>
-
-      <!-- 音声プレイヤー -->
-      <div class="section">
-        <div class="section-header" onclick="toggleSection('audio')">
-          <h3>録音音声</h3><span class="section-toggle" id="toggle-audio">▼</span>
-        </div>
-        <div id="section-audio" class="section-body">
-          <div id="audio-players"></div>
         </div>
       </div>
 
@@ -790,6 +838,20 @@ function normForDiff(text) {
   return t.replace(/[。、！？!?,\.・\s]/g, '');
 }
 
+// ── テキスト類似度（0..1）：包含優先 + Dice係数（bigram）──
+function textSim(a, b) {
+  const na = normForDiff(a), nb = normForDiff(b);
+  if (!na || !nb) return 0;
+  const short = na.length <= nb.length ? na : nb;
+  const long  = na.length <= nb.length ? nb : na;
+  if (short.length >= 2 && long.includes(short)) return short.length / long.length;
+  if (na.length < 2 || nb.length < 2) return na === nb ? 1 : 0;
+  const grams = s => { const set = new Set(); for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2)); return set; };
+  const A = grams(na), B = grams(nb);
+  let inter = 0; for (const g of A) if (B.has(g)) inter++;
+  return (A.size + B.size) === 0 ? 0 : (2 * inter) / (A.size + B.size);
+}
+
 function renderMerged(p) {
   const section = document.getElementById('merged-section');
   if (!p.merged) { section.style.display = 'none'; return; }
@@ -824,15 +886,27 @@ function renderMerged(p) {
       }
     });
   });
+  // recording_id → 累積オフセット(ms)：各チャンクのstartを「録音開始からの絶対ms」に補正
+  const recsSorted = [...(p.recordings || [])].sort((a, b) => (a.seq || 0) - (b.seq || 0));
+  const offsetByRecId = {};
+  let cum = 0;
+  for (const rec of recsSorted) {
+    offsetByRecId[rec.id] = cum;
+    const dur = parseFloat(rec.duration || '0') || 0;
+    cum += Math.round(dur * 1000);
+  }
+
   p.transcripts.forEach(tx => {
     if (tx.status !== 'completed') return;
     const colKey = tx.run_number === 1 ? 'run1' : 'run2';
     const spkMap = tx.speaker_map || {};
+    const baseOffset = offsetByRecId[tx.recording_id] || 0;
     (tx.utterances || []).forEach(u => {
-      const startSec = Math.floor((u.start || 0) / 1000);
+      const absMs = (u.start || 0) + baseOffset;
+      const startSec = Math.floor(absMs / 1000);
       const ts = `${String(Math.floor(startSec/60)).padStart(2,'0')}:${String(startSec%60).padStart(2,'0')}`;
       items.push({
-        ms: u.start || 0, col: colKey,
+        ms: absMs, col: colKey,
         seg: {
           ts, text: fixJa(u.text || ''),
           speaker: spkMap[u.speaker] || `Speaker ${u.speaker || 'A'}`,
@@ -845,15 +919,70 @@ function renderMerged(p) {
   // 時系列ソート
   items.sort((a, b) => a.ms - b.ms);
 
-  // 2秒窓でグループ化（同一カラムは新行へ）
-  const WINDOW = 2000;
-  const rows = [];
-  for (const item of items) {
-    const last = rows[rows.length - 1];
-    if (last && (item.ms - last._anchorMs) < WINDOW && !last.cells[item.col]) {
-      last.cells[item.col] = item.seg;
-    } else {
-      rows.push({_anchorMs: item.ms, cells: {[item.col]: item.seg}});
+  // ── 集約：LLM行をアンカーにして ws/run1/run2 を最近傍に割り当て ──
+  // LLM結果が無い場合は従来の2秒窓ロジックにフォールバック
+  const llmItems = items.filter(x => x.col === 'llm');
+  let rows;
+  if (llmItems.length === 0) {
+    const WINDOW = 2000;
+    rows = [];
+    for (const item of items) {
+      const last = rows[rows.length - 1];
+      if (last && (item.ms - last._anchorMs) < WINDOW && !last.cells[item.col]) {
+        last.cells[item.col] = item.seg;
+      } else {
+        rows.push({_anchorMs: item.ms, cells: {[item.col]: item.seg}});
+      }
+    }
+  } else {
+    const SCORE_TIME_FULL_MS = 5000;
+    const SCORE_W_TIME = 0.4;
+    const SCORE_W_TEXT = 0.6;
+    const SCORE_THRESHOLD = 0.35;
+
+    const llmAnchors = llmItems.map(x => ({
+      _anchorMs: x.ms,
+      _anchorText: x.seg.text || '',
+      cells: { llm: x.seg },
+    }));
+
+    const assign = (srcItems, colKey, orphans) => {
+      for (const item of srcItems) {
+        let best = null, bestScore = -1;
+        for (const row of llmAnchors) {
+          const timeDist = Math.abs(item.ms - row._anchorMs);
+          const timeScore = Math.max(0, 1 - timeDist / SCORE_TIME_FULL_MS);
+          const textScore = textSim(item.seg.text, row._anchorText);
+          const score = SCORE_W_TIME * timeScore + SCORE_W_TEXT * textScore;
+          if (score > bestScore) { bestScore = score; best = row; }
+        }
+        if (best && bestScore >= SCORE_THRESHOLD) {
+          if (best.cells[colKey]) {
+            if (!Array.isArray(best.cells[colKey])) best.cells[colKey] = [best.cells[colKey]];
+            best.cells[colKey].push(item.seg);
+          } else {
+            best.cells[colKey] = item.seg;
+          }
+        } else {
+          orphans.push({ ms: item.ms, col: colKey, seg: item.seg });
+        }
+      }
+    };
+
+    const byCol = { ws: [], run1: [], run2: [] };
+    items.forEach(x => { if (x.col !== 'llm' && byCol[x.col]) byCol[x.col].push(x); });
+
+    const orphans = [];
+    assign(byCol.ws,   'ws',   orphans);
+    assign(byCol.run1, 'run1', orphans);
+    assign(byCol.run2, 'run2', orphans);
+
+    rows = [...llmAnchors];
+    orphans.sort((a, b) => a.ms - b.ms);
+    for (const o of orphans) {
+      const insertAt = rows.findIndex(r => r._anchorMs > o.ms);
+      const row = { _anchorMs: o.ms, cells: { [o.col]: o.seg } };
+      if (insertAt < 0) rows.push(row); else rows.splice(insertAt, 0, row);
     }
   }
 
@@ -888,23 +1017,28 @@ function renderMerged(p) {
   function buildCell(seg, col, normLlm) {
     const cell = document.createElement('div');
     cell.className = 'compare-cell';
-    if (!seg) {
+    if (!seg || (Array.isArray(seg) && seg.length === 0)) {
       cell.innerHTML = '<span class="cell-empty">—</span>';
       return cell;
     }
-    // LLMとの差分判定（LLM列以外）
+    const segs = Array.isArray(seg) ? seg : [seg];
+    // LLMとの差分判定（LLM列以外）：いずれか一致すれば差分なし扱い
     if (col !== 'llm' && normLlm) {
-      if (normForDiff(seg.text) !== normLlm) cell.classList.add('cell-diff');
+      const anyMatch = segs.some(s => normForDiff(s.text) === normLlm);
+      if (!anyMatch) cell.classList.add('cell-diff');
     }
-    const tsHtml = seg.ts ? `<span class="cell-ts">${escHtml(seg.ts)}</span>` : '';
-    const noteHtml = seg.note ? `<span class="cell-note-tag">⚠ ${escHtml(seg.note)}</span>` : '';
-    cell.innerHTML = `
-      <div class="cell-meta">
-        <span class="cell-speaker" style="color:${seg.color || 'var(--sub)'}">${escHtml(seg.speaker || '')}</span>
-        ${tsHtml}
-      </div>
-      <div class="cell-body">${escHtml(seg.text || '')}</div>
-      ${noteHtml}`;
+    cell.innerHTML = segs.map((s, i) => {
+      const tsHtml = s.ts ? `<span class="cell-ts">${escHtml(s.ts)}</span>` : '';
+      const noteHtml = s.note ? `<span class="cell-note-tag">⚠ ${escHtml(s.note)}</span>` : '';
+      const sep = i > 0 ? '<hr style="border:0;border-top:1px dashed #333;margin:6px 0">' : '';
+      return `${sep}
+        <div class="cell-meta">
+          <span class="cell-speaker" style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
+          ${tsHtml}
+        </div>
+        <div class="cell-body">${escHtml(s.text || '')}</div>
+        ${noteHtml}`;
+    }).join('');
     return cell;
   }
 
@@ -1014,7 +1148,12 @@ function getMergeSettings() {
   const ws = parseInt(localStorage.getItem('merge_w_ws')   ?? '2', 10);
   const r1 = parseInt(localStorage.getItem('merge_w_run1') ?? '4', 10);
   const r2 = parseInt(localStorage.getItem('merge_w_run2') ?? '4', 10);
-  return { w_ws: ws, w_run1: r1, w_run2: r2 };
+  let base = localStorage.getItem('merge_base') ?? 'run1';
+  if (!['ws','run1','run2'].includes(base)) base = 'run1';
+  return { w_ws: ws, w_run1: r1, w_run2: r2, base };
+}
+function saveMergeBase(base) {
+  if (['ws','run1','run2'].includes(base)) localStorage.setItem('merge_base', base);
 }
 function saveMergeWeights(ws, r1, r2) {
   localStorage.setItem('merge_w_ws',   String(ws));
@@ -1064,6 +1203,18 @@ function setMergePreset(ws, r1, r2) {
 function loadMergeSettingsUI() {
   const s = getMergeSettings();
   _renderMergeSliders(s.w_ws, s.w_run1, s.w_run2);
+  const radios = document.querySelectorAll('input[name="merge-base"]');
+  radios.forEach(r => { r.checked = (r.value === s.base); });
+  // Run1/Run2 のラベルを実エンジンで動的表示
+  const engineName = e => ({whisper:'Whisper', deepgram:'Deepgram'}[e] || 'ASR');
+  const r1 = getRunSettings(1), r2 = getRunSettings(2);
+  const lab1 = document.getElementById('merge-base-label-run1');
+  const lab2 = document.getElementById('merge-base-label-run2');
+  if (lab1) lab1.textContent = `${engineName(r1.engine)} Run1（推奨）`;
+  if (lab2) lab2.textContent = `${engineName(r2.engine)} Run2`;
+}
+function onMergeBaseChange(value) {
+  saveMergeBase(value);
 }
 
 async function openApiSettings() {
@@ -1087,6 +1238,75 @@ async function openApiSettings() {
 function closeApiSettings() {
   document.getElementById('settings-modal').classList.remove('show');
   document.body.classList.remove('modal-open');
+}
+
+// ── 音声ファイル直接アップロード ──
+function openUploadModal() {
+  document.getElementById('upload-modal').style.display = 'flex';
+  document.body.classList.add('modal-open');
+  document.getElementById('upload-mtg-name').value = '';
+  document.getElementById('upload-participants').value = '';
+  document.getElementById('upload-files').value = '';
+  document.getElementById('upload-file-list').textContent = '';
+  document.getElementById('upload-status').textContent = '';
+  document.getElementById('upload-submit').disabled = false;
+}
+function closeUploadModal() {
+  document.getElementById('upload-modal').style.display = 'none';
+  document.body.classList.remove('modal-open');
+}
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'upload-files') {
+    const files = Array.from(e.target.files || []);
+    const totalMB = (files.reduce((s, f) => s + f.size, 0) / (1024*1024)).toFixed(1);
+    const lines = files.map((f, i) => `${i+1}. ${f.name} (${(f.size/(1024*1024)).toFixed(2)}MB)`).join('<br>');
+    document.getElementById('upload-file-list').innerHTML =
+      files.length === 0 ? '' : `${lines}<br><strong>合計: ${totalMB}MB</strong>`;
+  }
+});
+async function submitUpload() {
+  const name = document.getElementById('upload-mtg-name').value.trim();
+  const participantsRaw = document.getElementById('upload-participants').value.trim();
+  const files = Array.from(document.getElementById('upload-files').files || []);
+  const status = document.getElementById('upload-status');
+  const submit = document.getElementById('upload-submit');
+
+  if (!name) { status.style.color = 'var(--red)'; status.textContent = 'MTG名を入力してください'; return; }
+  if (files.length === 0) { status.style.color = 'var(--red)'; status.textContent = '音声ファイルを選択してください'; return; }
+
+  const participants = participantsRaw ? participantsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+  submit.disabled = true;
+  status.style.color = 'var(--sub)';
+  status.textContent = 'アップロード中…';
+
+  try {
+    const fd = new FormData();
+    fd.append('meta', JSON.stringify({
+      name,
+      participants,
+      segments: [],
+      speaker_events: [],
+    }));
+    files.forEach(f => fd.append('audio', f, f.name));
+
+    const res = await fetch('/api/projects', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const d = await res.json();
+
+    status.style.color = 'var(--green)';
+    status.textContent = `✅ アップロード成功 (project_id=${d.project_id}, recordings=${d.recordings})`;
+
+    setTimeout(() => {
+      closeUploadModal();
+      if (typeof loadProjects === 'function') loadProjects();
+      if (typeof selectProject === 'function') selectProject(d.project_id);
+    }, 800);
+  } catch (e) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'エラー: ' + e.message;
+    submit.disabled = false;
+  }
 }
 
 function renderApiKeys(keys) {
@@ -1335,10 +1555,16 @@ const DEFAULT_RUN_SETTINGS = {
 let _editingRun = 1;
 
 function getRunSettings(run) {
+  let s;
   try {
     const stored = JSON.parse(localStorage.getItem(`run${run}_settings`) || 'null');
-    return stored || {...DEFAULT_RUN_SETTINGS[run]};
-  } catch { return {...DEFAULT_RUN_SETTINGS[run]}; }
+    s = stored || {...DEFAULT_RUN_SETTINGS[run]};
+  } catch { s = {...DEFAULT_RUN_SETTINGS[run]}; }
+  // モデルが engine と矛盾していたら engine を再導出（過去の壊れた設定への耐性）
+  const m = (s.model || '').toLowerCase();
+  if (m.startsWith('nova')) s.engine = 'deepgram';
+  else if (m.startsWith('whisper')) s.engine = 'whisper';
+  return s;
 }
 
 // モデル変更時：エンジンを自動判定し、話者分離の有効/無効を制御
@@ -1381,10 +1607,13 @@ function closeRunModal() {
 }
 
 function saveRunSettings() {
+  const modelSel = document.getElementById('run-model');
+  const opt = modelSel.querySelector(`option[value="${modelSel.value}"]`);
+  const engine = opt ? (opt.dataset.engine || 'whisper') : 'whisper';
   const s = {
-    engine:   document.getElementById('run-engine').value,
+    engine,
     language: document.getElementById('run-language').value,
-    model:    document.getElementById('run-model').value,
+    model:    modelSel.value,
     diarize:  document.getElementById('run-diarize').checked,
     prompt:   document.getElementById('run-prompt').value.trim(),
   };
@@ -1442,7 +1671,8 @@ document.getElementById('btn-merge').addEventListener('click', async () => {
   try {
     const ms = getMergeSettings();
     const qs = `?model=${encodeURIComponent(model)}`
-             + `&w_ws=${ms.w_ws}&w_run1=${ms.w_run1}&w_run2=${ms.w_run2}`;
+             + `&w_ws=${ms.w_ws}&w_run1=${ms.w_run1}&w_run2=${ms.w_run2}`
+             + `&base=${encodeURIComponent(ms.base)}`;
     const res = await apiFetch(`/api/projects/${id}/merge${qs}`, {method: 'POST'});
     if (!res.ok) throw new Error(await res.text());
     const d = await res.json();

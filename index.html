@@ -80,6 +80,24 @@ button:disabled{opacity:.3;cursor:default;transform:none}
 #rec-controls{padding:12px 20px 20px;border-top:1px solid var(--border);
   display:flex;flex-direction:column;gap:10px;flex-shrink:0}
 
+/* 一時停止中の詳細パネル */
+#pause-detail-panel{background:#181818;border:1px solid var(--border);
+  border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.pause-detail-header{display:flex;justify-content:space-between;align-items:center;
+  font-size:13px;color:var(--text);font-weight:700}
+.pause-detail-header span:last-child{color:var(--sub);font-weight:400;font-size:12px}
+#pause-detail-list{display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto}
+.pause-chunk-row{display:flex;justify-content:space-between;align-items:center;
+  background:#222;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px}
+.pause-chunk-info{display:flex;flex-direction:column;gap:2px}
+.pause-chunk-title{color:var(--text);font-weight:700}
+.pause-chunk-meta{color:var(--sub);font-size:11px}
+.btn-pause-chunk-del{background:#3a1a1a;color:#f87171;border:1px solid #5a2a2a;
+  border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer}
+.btn-pause-chunk-del:active{opacity:.7}
+.pause-detail-stt{font-size:11px;color:var(--sub);padding-top:4px;border-top:1px dashed var(--border)}
+.pause-detail-empty{color:var(--sub);font-size:12px;text-align:center;padding:8px 0}
+
 /* レベルバー */
 #level-bar{height:4px;background:var(--border);border-radius:2px;
   overflow:hidden;visibility:hidden}
@@ -93,7 +111,7 @@ button:disabled{opacity:.3;cursor:default;transform:none}
   color:var(--text);border:1px solid var(--border);font-size:16px}
 .btn-speaker.active{color:#fff;border-color:transparent}
 
-.rec-row{display:flex;gap:8px}
+.rec-row{display:flex;gap:8px;align-items:stretch}
 #btn-stop-rec{flex:1;padding:16px;background:var(--red-dim);color:#fff;font-size:20px}
 #btn-hl{width:56px;height:56px;background:var(--surface);
   color:var(--yellow);border:1px solid var(--border);font-size:24px}
@@ -162,8 +180,9 @@ audio{width:100%;height:40px}
 .status-pause{color:var(--yellow);background:rgba(251,191,36,.12)}
 .status-error{color:var(--red);background:rgba(229,62,62,.12);animation:blink .8s infinite}
 @keyframes blink{50%{opacity:.45}}
-#btn-pause-rec{background:var(--yellow);color:#111;font-weight:700}
-#btn-pause-rec.paused{background:var(--red);color:#fff}
+#btn-pause-rec{flex:1;padding:16px;font-size:18px;
+  background:var(--yellow);color:#111;font-weight:700}
+#btn-pause-rec.paused{background:#3b82f6;color:#fff}
 
 /* ── ブラウザ警告オーバーレイ ── */
 #browser-warn{
@@ -279,6 +298,10 @@ audio{width:100%;height:40px}
     <h2>参加者名を入力（省略可）</h2>
     <div id="name-list"></div>
     <button id="btn-add-name">＋ 参加者を追加</button>
+
+    <h2 style="margin-top:20px">録音品質（ビットレート）</h2>
+    <div id="bitrate-selector" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+    <div id="bitrate-note" style="font-size:12px;color:var(--sub);line-height:1.5"></div>
   </div>
   <div id="setup-footer">
     <button id="btn-start-rec">録音開始</button>
@@ -292,9 +315,15 @@ audio{width:100%;height:40px}
       <h1 id="rec-screen-title">録音中</h1>
       <span id="rec-status" class="status-live">● LIVE</span>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
-      <span id="rec-timer">00:00</span>
-      <span id="rec-remaining" style="font-size:12px;color:var(--sub)">残り 20:00</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <a class="hdr-icon-btn" href="/ai-voice-memo/admin/" title="管理画面へ"
+         style="text-decoration:none;display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:6px 10px">
+        🖥 管理画面
+      </a>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        <span id="rec-timer">00:00</span>
+        <span id="rec-remaining" style="font-size:12px;color:var(--sub)">残り 20:00</span>
+      </div>
     </div>
   </div>
   <div id="stt-warn" style="display:none;background:#3a2a00;border-left:4px solid var(--yellow);color:#ffe;padding:10px 12px;margin:8px 16px 0;border-radius:6px;font-size:13px;line-height:1.5">
@@ -312,6 +341,14 @@ audio{width:100%;height:40px}
     <div id="level-bar"><div id="level-fill"></div></div>
     <div id="speaker-btns"></div>
     <div id="chunks-info" style="font-size:12px;color:var(--sub);text-align:center;margin-bottom:4px"></div>
+    <div id="pause-detail-panel" style="display:none">
+      <div class="pause-detail-header">
+        <span>一時停止中の詳細</span>
+        <span id="pause-detail-total"></span>
+      </div>
+      <div id="pause-detail-list"></div>
+      <div id="pause-detail-stt" class="pause-detail-stt"></div>
+    </div>
     <div class="rec-row">
       <button id="btn-pause-rec">一時停止</button>
       <button id="btn-hl" title="ハイライト">★</button>
@@ -361,6 +398,38 @@ const MAX_REC_MS = 20 * 60 * 1000;  // 1チャンクあたりの最大録音時�
 const DB_NAME = 'VoiceMemo', DB_VER = 1, STORE = 'recordings';
 const TTL_MS = 24 * 60 * 60 * 1000;  // IndexedDB 24時間TTL
 
+const BITRATE_OPTIONS = [
+  {value: 32000,  label: '32kbps', note: '省サイズ・電話品質'},
+  {value: 64000,  label: '64kbps', note: '推奨・VoIP品質'},
+  {value: 96000,  label: '96kbps', note: '高品質'},
+  {value: 128000, label: '128kbps', note: '最高品質・ファイル大'},
+];
+function getAudioBitrate() {
+  const v = parseInt(localStorage.getItem('audio_bitrate') || '64000', 10);
+  return BITRATE_OPTIONS.some(o => o.value === v) ? v : 64000;
+}
+function setAudioBitrate(v) {
+  localStorage.setItem('audio_bitrate', String(v));
+  renderBitrateSelector();
+}
+function renderBitrateSelector() {
+  const wrap = document.getElementById('bitrate-selector');
+  if (!wrap) return;
+  const cur = getAudioBitrate();
+  wrap.innerHTML = '';
+  BITRATE_OPTIONS.forEach(o => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = o.label;
+    btn.style.cssText = `flex:1;min-width:70px;padding:10px 8px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;border:1px solid ${o.value === cur ? '#3b82f6' : 'var(--border)'};background:${o.value === cur ? '#3b82f6' : 'var(--surface)'};color:${o.value === cur ? '#fff' : 'var(--text)'}`;
+    btn.addEventListener('click', () => setAudioBitrate(o.value));
+    wrap.appendChild(btn);
+  });
+  const note = document.getElementById('bitrate-note');
+  const sel = BITRATE_OPTIONS.find(o => o.value === cur);
+  if (note && sel) note.textContent = `現在: ${sel.label} (${sel.note})  ※次の録音から反映されます`;
+}
+
 // ══════════════════════════════════════
 // デバッグログバッファ（設定モーダルから閲覧）
 // ══════════════════════════════════════
@@ -405,6 +474,7 @@ const state = {
   sttWarnDismissedAt: null,  // 確認バナーをユーザーが閉じた時刻
   timerInterval: null,
   restartTimer: null,
+  pauseRefreshTimer: null,
   isRecording: false,
   nextHighlight: false,
   mediaRecorder: null,
@@ -492,7 +562,10 @@ $('btn-start-rec').addEventListener('click', () => {
   });
   // 空文字除去
   state.participants = state.participants.filter(n => n.trim() !== '');
-  state.currentSpeaker = state.participants.length > 0 ? 0 : null;
+  if (state.participants.length === 0) {
+    state.participants = ['参加者1', '参加者2', '参加者3', '参加者4'];
+  }
+  state.currentSpeaker = 0;
   // 保存表示→録音開始
   const filled = state.participants.length;
   toast(`参加者 ${filled}名 を保存しました。録音を開始します`, 1500);
@@ -502,28 +575,46 @@ $('btn-start-rec').addEventListener('click', () => {
 // ══════════════════════════════════════
 // STT 結果ハンドラ（共通：startRecording / resumeRecording 両方で使用）
 // ══════════════════════════════════════
+// 句読点で発話を分割（「。」「．」「！」「？」の後ろで区切る）
+function splitByPunctuation(text) {
+  const parts = text.split(/(?<=[。．！？])/g).map(s => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : [text];
+}
+
 function handleSTTResult({text, isFinal}) {
-  state.lastSttAt = Date.now();  // STT稼働確認用
+  state.lastSttAt = Date.now();
   if (isFinal) {
+    const parts = splitByPunctuation(text.trim());
     const interimIdx = state.segments.findIndex(s => s.isInterim);
     if (interimIdx >= 0) {
       state.segments[interimIdx] = {
-        text: text.trim(),
+        text: parts[0],
         speakerIdx: state.segments[interimIdx].speakerIdx ?? state.currentSpeaker,
         ts: state.segments[interimIdx].ts,
         highlight: state.segments[interimIdx].highlight || state.nextHighlight,
         isInterim: false,
       };
+      for (let i = 1; i < parts.length; i++) {
+        state.segments.push({
+          text: parts[i],
+          speakerIdx: state.currentSpeaker,
+          ts: getElapsed(),
+          highlight: false,
+          isInterim: false,
+        });
+      }
       state.nextHighlight = false;
-    } else if (text.trim()) {
-      state.segments.push({
-        text: text.trim(),
-        speakerIdx: state.currentSpeaker,
-        ts: getElapsed(),
-        highlight: state.nextHighlight,
-        isInterim: false,
-      });
-      state.nextHighlight = false;
+    } else if (parts[0]) {
+      for (const part of parts) {
+        state.segments.push({
+          text: part,
+          speakerIdx: state.currentSpeaker,
+          ts: getElapsed(),
+          highlight: state.nextHighlight,
+          isInterim: false,
+        });
+        state.nextHighlight = false;
+      }
     }
     renderRecTranscript();
   } else {
@@ -593,7 +684,7 @@ async function startRecording() {
   state.audioChunks = [];
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus' : 'audio/webm';
-  const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
+  const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: getAudioBitrate()});
   mr.ondataavailable = e => { if (e.data.size > 0) state.audioChunks.push(e.data); };
   mr.start(1000);
   state.mediaRecorder = mr;
@@ -719,7 +810,7 @@ async function resumeRecording() {
     const stream = await navigator.mediaDevices.getUserMedia({audio:true});
     const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus' : 'audio/webm';
-    const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
+    const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: getAudioBitrate()});
     state.mediaRecorder = mr;
     state.audioChunks = [];
     mr.ondataavailable = e => { if (e.data.size > 0) state.audioChunks.push(e.data); };
@@ -791,7 +882,63 @@ function updateRecUI() {
   chunks.textContent = state.allAudioBlobs.length > 0
     ? `保存済みチャンク: ${state.allAudioBlobs.length}件`
     : '';
+  renderPauseDetail();
   updateRecStatus();
+}
+
+function renderPauseDetail() {
+  const panel = $('pause-detail-panel');
+  if (!panel) return;
+  if (!state.isPaused) {
+    panel.style.display = 'none';
+    if (state.pauseRefreshTimer) { clearInterval(state.pauseRefreshTimer); state.pauseRefreshTimer = null; }
+    return;
+  }
+  panel.style.display = 'flex';
+  if (!state.pauseRefreshTimer) {
+    state.pauseRefreshTimer = setInterval(renderPauseDetail, 1000);
+  }
+
+  const total = getElapsed();
+  $('pause-detail-total').textContent = `合計 ${total}`;
+
+  const list = $('pause-detail-list');
+  list.innerHTML = '';
+  if (state.allAudioBlobs.length === 0) {
+    list.innerHTML = '<div class="pause-detail-empty">録音チャンクはまだありません</div>';
+  } else {
+    state.allAudioBlobs.forEach((c, i) => {
+      const row = document.createElement('div');
+      row.className = 'pause-chunk-row';
+      const info = document.createElement('div');
+      info.className = 'pause-chunk-info';
+      const sizeKB = Math.round((c.blob?.size || 0) / 1024);
+      info.innerHTML = `<span class="pause-chunk-title">チャンク ${i + 1}</span>` +
+        `<span class="pause-chunk-meta">${sizeKB} KB / ${c.mime || 'audio/webm'}</span>`;
+      const del = document.createElement('button');
+      del.className = 'btn-pause-chunk-del';
+      del.textContent = '削除';
+      del.addEventListener('click', () => deletePauseChunk(i));
+      row.appendChild(info);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+
+  const sttEl = $('pause-detail-stt');
+  const lastSttAgo = state.lastSttAt
+    ? `${Math.round((Date.now() - state.lastSttAt) / 1000)}秒前`
+    : '未受信';
+  const sessionSegs = state.segments.filter(s => !s.isInterim).length;
+  sttEl.textContent = `STT最終受信: ${lastSttAgo}  /  確定セグメント: ${sessionSegs}件  /  話者: ${state.participants.length}名`;
+}
+
+function deletePauseChunk(index) {
+  if (!confirm(`チャンク ${index + 1} を削除しますか？\n（メモリ上のみ・取り消し不可）`)) return;
+  state.allAudioBlobs.splice(index, 1);
+  logEvent(`チャンク${index + 1}を削除（残り${state.allAudioBlobs.length}件）`);
+  toast(`チャンク${index + 1}を削除しました`);
+  updateRecUI();
 }
 
 // ══════════════════════════════════════
@@ -845,8 +992,17 @@ function updateSttWarn() {
 // ══════════════════════════════════════
 // 「保存して完了」ボタン
 // ══════════════════════════════════════
+const ADMIN_URL = '/ai-voice-memo/admin/';
+
 async function completeAndUpload() {
   const btn = $('btn-complete-rec');
+  // 送信済み：再押下は管理画面遷移（beforeunload警告抑止のためフラグクリア）
+  if (state.uploadedToVps) {
+    state.isRecording = false;
+    state.isPaused = false;
+    location.href = ADMIN_URL;
+    return;
+  }
   btn.disabled = true;
   btn.textContent = '保存処理中…';
 
@@ -904,9 +1060,8 @@ async function completeAndUpload() {
     toast(`✅ 完了しました（${state.allAudioBlobs.length}件アップロード）。PCの管理画面で解析・確認してください`, 4000);
     // モバイルは管理画面に遷移しない。録音と話者選択のみ
     const btn = $('btn-complete-rec');
-    btn.textContent = '✓ 送信完了';
-    btn.style.background = 'var(--green)';
-    setTimeout(() => { btn.disabled = false; btn.textContent = '保存して完了 →'; btn.style.background = ''; }, 5000);
+    btn.disabled = false;
+    btn.textContent = '📊 管理画面で確認 →';
   } catch(e) {
     btn.disabled = false;
     btn.textContent = '保存して完了 →';
@@ -1543,6 +1698,7 @@ function init() {
 checkBrowser();
 init();
 purgeExpired();
+renderBitrateSelector();
 
 // ── データロスト防止：ページ離脱警告 ──
 function hasUnsavedData() {

@@ -65,7 +65,7 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 - `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョン定数 `const CACHE = 'voicememo-vX.Y';`（編集後は必ずインクリメント）
 - `CONCEPT.md` — プロダクト哲学・全体構成の図解ドキュメント（人間向け補足。CLAUDE.mdより詳細な背景）
 - `docs/system-overview.html` — システム概要のHTML版（社外説明用）
-- `_main_remote.py` / `_admin_remote.html` — **VPSから取得した現在の本番コピー（参照専用・編集しない）**。ローカル正典と差分確認するための比較用スナップショット。git追跡外でよい
+- `_main_remote.py` / `_admin_remote.html` — **ローカル正典（編集可・scpデプロイ正規ルート）**。これらを編集 → VPS の `/opt/jizo-api/main.py` および `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` へ scp → 必要に応じ `systemctl restart jizo-api`
 
 ### VPS（`root@162.43.14.31`）
 - `/var/www/jizo-dev.com/ai-voice-memo/index.html` — モバイルPWA（↑のコピー）

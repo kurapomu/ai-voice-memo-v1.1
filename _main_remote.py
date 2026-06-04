@@ -242,18 +242,33 @@ async def create_project(
                  ev.get('speaker_idx'),
                  ev.get('speaker_name', ''))
             )
+        _MIME_EXT = {
+            'audio/webm': 'webm', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
+            'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
+            'audio/mp4': 'mp4', 'audio/m4a': 'm4a', 'audio/x-m4a': 'm4a',
+            'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac',
+        }
+        def _ext_for(upload):
+            mt = (upload.content_type or '').lower()
+            if mt in _MIME_EXT: return _MIME_EXT[mt]
+            fn = (upload.filename or '').lower()
+            for ext in ('webm','wav','mp3','m4a','mp4','ogg','flac'):
+                if fn.endswith('.' + ext): return ext
+            return 'webm'
+
         saved_seq = 0
         for f in audio:
             data = await f.read()
             if not data:
                 logger.warning(f'create_project: empty audio chunk skipped (project={project_id}, filename={f.filename})')
                 continue
-            path = os.path.join(AUDIO_DIR, f'{project_id}_{saved_seq}.webm')
+            ext = _ext_for(f)
+            path = os.path.join(AUDIO_DIR, f'{project_id}_{saved_seq}.{ext}')
             with open(path, 'wb') as fp:
                 fp.write(data)
             conn.execute(
                 'INSERT INTO recordings(project_id,seq,audio_path,mime,duration,created_at) VALUES(?,?,?,?,?,?)',
-                (project_id, saved_seq, path, f.content_type or 'audio/webm', '', now_iso())
+                (project_id, saved_seq, path, f.content_type or f'audio/{ext}', '', now_iso())
             )
             saved_seq += 1
         conn.commit()
@@ -560,7 +575,7 @@ async def _run_whisper(audio_path: str, settings: dict, pnames: list, keyterms: 
     minutes = duration_sec / 60.0
     cost = minutes * USAGE_LIMITS['whisper']['rate_usd_per_min']
     _record_usage('whisper', minutes, 'minutes', project_id, '/analyze', cost)
-    return utterances, (transcript.text or '')
+    return utterances, (transcript.text or ''), duration_sec
 
 
 async def _run_deepgram(audio_path: str, settings: dict, pnames: list, keyterms: list,
@@ -646,7 +661,7 @@ async def _run_deepgram(audio_path: str, settings: dict, pnames: list, keyterms:
     minutes = duration_sec / 60.0
     cost = minutes * USAGE_LIMITS['deepgram']['rate_usd_per_min']
     _record_usage('deepgram', minutes, 'minutes', project_id, '/analyze', cost)
-    return utterances, full_text
+    return utterances, full_text, duration_sec
 
 
 @app.post('/api/projects/{project_id}/analyze')
@@ -724,9 +739,9 @@ async def analyze_project(project_id: str, run: int = 1, force: bool = False,
         logger.info(f'analyze run={run} engine={engine} rec={rec["id"]} settings={settings}')
         try:
             if engine == 'whisper':
-                utterances, full_text = await _run_whisper(rec['audio_path'], settings, pnames, keyterms, project_id)
+                utterances, full_text, duration_sec = await _run_whisper(rec['audio_path'], settings, pnames, keyterms, project_id)
             else:
-                utterances, full_text = await _run_deepgram(rec['audio_path'], settings, pnames, keyterms, project_id)
+                utterances, full_text, duration_sec = await _run_deepgram(rec['audio_path'], settings, pnames, keyterms, project_id)
         except HTTPException:
             conn.close()
             raise
@@ -735,8 +750,15 @@ async def analyze_project(project_id: str, run: int = 1, force: bool = False,
             logger.error(f'{engine} error: {e}')
             raise HTTPException(502, f'{engine} failed: {e}')
 
-        logger.info(f'{engine} done segments={len(utterances)}')
+        logger.info(f'{engine} done segments={len(utterances)} duration={duration_sec:.2f}s')
         total_segments += len(utterances)
+
+        # recordings.duration を秒文字列で更新（管理画面のチャンクオフセット計算に使用）
+        if duration_sec > 0 and not (rec['duration'] or '').strip():
+            conn.execute(
+                'UPDATE recordings SET duration=? WHERE id=?',
+                (f'{duration_sec:.3f}', rec['id'])
+            )
 
         ext_id = f'{engine}:{rec["id"]}:{run}'
         conn.execute(
@@ -869,6 +891,7 @@ async def merge_project(project_id: str,
                         w_ws: int = 2,
                         w_run1: int = 4,
                         w_run2: int = 4,
+                        base: str = '',
                         _: str = Depends(require_admin)):
     conn = get_conn()
     proj = conn.execute('SELECT * FROM projects WHERE id=?', (project_id,)).fetchone()
@@ -893,7 +916,20 @@ async def merge_project(project_id: str,
         "SELECT * FROM ai_transcripts WHERE project_id=? AND status='completed' ORDER BY run_number,id",
         (project_id,)
     ).fetchall()
+    recs_for_offset = conn.execute(
+        'SELECT id,seq,duration FROM recordings WHERE project_id=? ORDER BY seq', (project_id,)
+    ).fetchall()
     conn.close()
+
+    # recording_id → 録音開始からの累積オフセット(ms)
+    offset_by_rec_id = {}
+    _cum = 0
+    for r in recs_for_offset:
+        offset_by_rec_id[r['id']] = _cum
+        try:
+            _cum += int(float(r['duration'] or 0) * 1000)
+        except Exception:
+            pass
 
     # ── 重み正規化（合計10）───────────────────────
     w_ws   = max(0, int(w_ws))
@@ -937,27 +973,35 @@ async def merge_project(project_id: str,
         run_engines[rn] = {'whisper': 'Whisper', 'deepgram': 'Deepgram'}.get(eng, eng or 'ASR')
         run_speaker_maps[rn] = json.loads(tx['speaker_map_json']) if tx['speaker_map_json'] else {}
         utts = json.loads(tx['utterances_json']) if tx['utterances_json'] else []
+        base_offset = offset_by_rec_id.get(tx['recording_id'], 0)
         for u in utts:
             text = (u.get('text') or '').strip()
             if not text:
                 continue
+            abs_ms = int(u.get('start') or 0) + base_offset
             run_items[rn].append({
-                'ms': int(u.get('start') or 0),
-                'ts': _ms_to_ts(u.get('start') or 0),
+                'ms': abs_ms,
+                'ts': _ms_to_ts(abs_ms),
                 'text': text,
                 'speaker': u.get('speaker', 'A'),
             })
 
-    # ── 骨組みソース選定（重み最大、同点はrun2>run1>ws）──
-    src_pool = []
-    if w_ws   > 0 and ws_items:     src_pool.append(('ws',   w_ws,   len(ws_items),     0))
-    if w_run1 > 0 and run_items[1]: src_pool.append(('run1', w_run1, len(run_items[1]), 1))
-    if w_run2 > 0 and run_items[2]: src_pool.append(('run2', w_run2, len(run_items[2]), 2))
-    if not src_pool:
-        raise HTTPException(400, '統合可能なソースがありません。重みを見直してください。')
-    # 優先順位: (重み desc, セグメント数 desc, 優先度 desc)
-    src_pool.sort(key=lambda x: (-x[1], -x[2], -x[3]))
-    backbone_key = src_pool[0][0]
+    # ── 骨組み（=出力の時間軸）：base 指定優先、無ければ重み最大 ──
+    base_key = (base or '').strip().lower()
+    if base_key in ('ws', 'run1', 'run2'):
+        _src_map = {'ws': ws_items, 'run1': run_items[1], 'run2': run_items[2]}
+        if not _src_map[base_key]:
+            raise HTTPException(400, f'基準ソース {base_key} にデータがありません。別のソースを選んでください。')
+        backbone_key = base_key
+    else:
+        src_pool = []
+        if w_ws   > 0 and ws_items:     src_pool.append(('ws',   w_ws,   len(ws_items),     0))
+        if w_run1 > 0 and run_items[1]: src_pool.append(('run1', w_run1, len(run_items[1]), 1))
+        if w_run2 > 0 and run_items[2]: src_pool.append(('run2', w_run2, len(run_items[2]), 2))
+        if not src_pool:
+            raise HTTPException(400, '統合可能なソースがありません。重みを見直してください。')
+        src_pool.sort(key=lambda x: (-x[1], -x[2], -x[3]))
+        backbone_key = src_pool[0][0]
 
     backbone_items = (
         ws_items if backbone_key == 'ws'
@@ -1031,31 +1075,35 @@ async def merge_project(project_id: str,
 
     backbone_label = src_label[backbone_key]
 
+    base_specified = base_key in ('ws', 'run1', 'run2')
     system_prompt = (
         'あなたは日本語音声書き起こしの統合エディタです。'
-        '与えられた行ごとに、複数の文字起こし候補から最良のテキストを採用または合成して、'
-        '読みやすい日本語トランスクリプトを生成してください。'
-        '行の追加・削除・マージ・分割は絶対に行ってはいけません。'
+        '**基準ソース**のテキストとセグメント分割を最優先で尊重し、'
+        '他のソースは**補完情報**としてのみ参照してください。'
+        '行の追加・削除・マージ・分割・並べ替えは絶対に行ってはいけません。'
+        '発話の主体・順序は基準ソースに従い、補完で文章の流れを変えてはいけません。'
     )
 
     user_prompt = f"""## 参加者
 {plist}
 
-## テキスト採用比重（ユーザー指定。合計10）
+## 基準ソース（時間軸・行構成の主軸）
+{backbone_label}{'（ユーザー指定）' if base_specified else '（自動選定）'}
+
+## 補完優先度（基準以外の2ソースをどれだけ採用するか。0 は無視）
 WebSpeech : Run1({run_engines[1]}) : Run2({run_engines[2]}) = {w_ws} : {w_run1} : {w_run2}
-※ 比重 0 のソースは使用禁止。比重が大きいソースのテキストを優先的に採用する。
-※ 行の骨組みは {backbone_label}（最大重み）。
 
 ## 必須ルール
 1. 出力は入力テーブルと **同じ行数・同じts・同じspeaker**（変更禁止）
-2. 各行の `text` は、入力テーブルの3候補から **重みに従って選ぶ・合成する**
-3. 比重 0 のソースは無視（候補から除外）
-4. すべての候補が空または「（なし）」なら、textは空文字 ""
-5. 単語間の不自然なスペース・全角スペースを除去
-6. 句読点（。、）を自然に補う
-7. 候補同士で内容が大きく食い違い、どちらが正しいか不明な箇所は `text` 末尾に「【要確認:理由】」を付記
-8. 話者ラベルが「未設定」の行は `text` 末尾に「【要確認:話者】」を付記
-9. 出力はJSONのみ（説明文・コードフェンス・余計な空行不要）
+2. 各行の `text` は **基準ソースのテキストを最優先で採用**
+3. 基準ソースが空・極端に短い・明らかな誤認識の場合のみ、補完優先度の高い他ソースで置換または合成可
+4. 補完優先度 0 のソースは無視（候補から除外）
+5. すべての候補が空または「（なし）」なら、textは空文字 ""
+6. 単語間の不自然なスペース・全角スペースを除去
+7. 句読点（。、）を自然に補う
+8. 基準と補完で内容が大きく食い違う箇所は `text` 末尾に「【要確認:理由】」を付記（基準のテキストは残す）
+9. 話者ラベルが「未設定」の行は `text` 末尾に「【要確認:話者】」を付記
+10. 出力はJSONのみ（説明文・コードフェンス・余計な空行不要）
 
 ## 入力テーブル（{len(rows)}行）
 {table_block}
