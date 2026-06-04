@@ -62,9 +62,11 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 ### ローカル（このディレクトリ）
 - `index.html` — モバイルPWA全体（VanillaJS・約1000行）※**正典：これを編集→VPSへscp**
 - `manifest.json` — PWAマニフェスト
-- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョン定数 `const CACHE = 'voicememo-vX.Y';`（編集後は必ずインクリメント）
+- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョン定数 `const CACHE = 'voicememo-vX.Y';`（**現在は `voicememo-v2.7`**、編集後は必ずインクリメント）
 - `CONCEPT.md` — プロダクト哲学・全体構成の図解ドキュメント（人間向け補足。CLAUDE.mdより詳細な背景）
 - `docs/system-overview.html` — システム概要のHTML版（社外説明用）
+- `docs/superpowers/plans/` — 中長期実装プランの置き場（`YYYY-MM-DD-トピック.md` 形式）
+- `docs/superpowers/specs/` — 設計仕様書の置き場（`YYYY-MM-DD-トピック.md` 形式）
 - `_main_remote.py` / `_admin_remote.html` — **ローカル正典（編集可・scpデプロイ正規ルート）**。これらを編集 → VPS の `/opt/jizo-api/main.py` および `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` へ scp → 必要に応じ `systemctl restart jizo-api`
 
 ### VPS（`root@162.43.14.31`）
@@ -79,19 +81,23 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 
 ## よく使うコマンド
 
-### デプロイ
-```bash
-# モバイルアプリ更新
-scp "c:\Users\taka\Downloads\files (1)\index.html" root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/index.html
+### デプロイ（MacBook 前提）
 
-# FastAPI更新
-scp local_main.py root@162.43.14.31:/opt/jizo-api/main.py
+作業ディレクトリ：`/Users/tkurata/Desktop/ai-voice-memo-v1-2/ai-voice-memo-v1.1/`
+
+```bash
+# モバイルアプリ更新（index.html）
+scp index.html root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/index.html
+
+# Service Worker更新（sw.js）— 編集時は CACHE 定数を必ずインクリメント
+scp sw.js root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/sw.js
+
+# FastAPI更新（_main_remote.py がローカル正典）
+scp _main_remote.py root@162.43.14.31:/opt/jizo-api/main.py
 ssh root@162.43.14.31 "systemctl restart jizo-api"
 
-# 管理画面更新
-scp admin.html root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/admin/index.html
-
-# Service Workerを更新したら必ず sw.js の CACHE バージョンを上げる（voicememo-vX.Y）
+# 管理画面更新（_admin_remote.html がローカル正典）
+scp _admin_remote.html root@162.43.14.31:/var/www/jizo-dev.com/ai-voice-memo/admin/index.html
 ```
 
 ### ログ確認
@@ -221,6 +227,7 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - **GitHub Pages は無効**。デプロイは VPS への scp が正のため、commit と本番反映は別操作
 - 編集 → ローカル動作確認 → VPS へ scp → `git add/commit/push`（履歴目的）の順
 - `_main_remote.py` / `_admin_remote.html` は本番取得スナップショットのため、原則コミットしない（.gitignore推奨）
+- 現状の `.gitignore` は `pics/` のみ。`_main_remote.py` / `_admin_remote.html` を `.gitignore` 追加するかは未決定（一時的にコミット履歴として残す運用も有）
 
 ---
 
@@ -246,6 +253,7 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - ✅ ログシステム（12hローテーション・`/api/logs`で閲覧）
 
 ### 未着手（フェーズ3〜4）
+- ⬜ **Zoom連携（v1）** — 設計仕様: `docs/superpowers/specs/2026-06-04-zoom-integration-design.md` / 実装プラン: `docs/superpowers/plans/2026-06-04-zoom-integration.md`（未着手）
 - ⬜ Claude API での要約・ToDo抽出・Q&A（CLAUDE.mdガイドラインでHaiku優先想定）
 - ⬜ 用途別テンプレート（会議・インタビュー・講義）
 - ⬜ Presidio + GiNZA によるPII保護

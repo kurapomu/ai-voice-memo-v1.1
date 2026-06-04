@@ -1,4 +1,4 @@
-import os, uuid, json, re, logging
+import os, uuid, json, re, logging, asyncio
 from datetime import datetime, timezone, timedelta
 from logging.handlers import TimedRotatingFileHandler
 
@@ -10,6 +10,8 @@ import httpx, secrets
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from db import init_db, get_conn
+from zoom_client import ZoomClient
+from zoom_webhook import verify_signature, build_url_validation_response
 
 load_dotenv()
 init_db()
@@ -39,6 +41,18 @@ GEMINI_BASE   = 'https://generativelanguage.googleapis.com/v1beta/openai'
 OPENAI_KEY    = os.environ.get('OPENAI_API_KEY', '')
 DEEPGRAM_KEY  = os.environ.get('DEEPGRAM_API_KEY', '')
 DEEPGRAM_BASE = 'https://api.deepgram.com/v1'
+
+# ── Zoom 連携（v1） ──────────────────────────────
+ZOOM_CLIENT_ID      = os.environ.get('ZOOM_CLIENT_ID', '')
+ZOOM_CLIENT_SECRET  = os.environ.get('ZOOM_CLIENT_SECRET', '')
+ZOOM_ACCOUNT_ID     = os.environ.get('ZOOM_ACCOUNT_ID', '')
+ZOOM_WEBHOOK_SECRET = os.environ.get('ZOOM_WEBHOOK_SECRET', '')
+ZOOM_AUDIO_DIR      = '/var/jizo/audio/zoom'
+os.makedirs(ZOOM_AUDIO_DIR, exist_ok=True)
+
+# 環境変数が未設定なら None（Webhook受信時に明示エラー）
+zoom_client = ZoomClient(ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, ZOOM_ACCOUNT_ID) \
+              if ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET and ZOOM_ACCOUNT_ID else None
 
 # ── 使用量上限（無料枠ベース・デフォルト）─────────
 USAGE_LIMITS = {
@@ -899,6 +913,12 @@ async def merge_project(project_id: str,
         conn.close()
         raise HTTPException(404, 'Project not found')
 
+    # source カラムは Task 2 のスキーマ拡張で追加される。未存在時は 'mobile' 扱い
+    try:
+        source = (proj['source'] or 'mobile') if 'source' in proj.keys() else 'mobile'
+    except Exception:
+        source = 'mobile'
+
     participants = conn.execute(
         'SELECT idx,name FROM participants WHERE project_id=? ORDER BY idx', (project_id,)
     ).fetchall()
@@ -916,10 +936,26 @@ async def merge_project(project_id: str,
         "SELECT * FROM ai_transcripts WHERE project_id=? AND status='completed' ORDER BY run_number,id",
         (project_id,)
     ).fetchall()
-    recs_for_offset = conn.execute(
-        'SELECT id,seq,duration FROM recordings WHERE project_id=? ORDER BY seq', (project_id,)
-    ).fetchall()
+    # Zoom MTG の場合、recordings.zoom_participant_name で話者を確定する
+    if source == 'zoom':
+        recs_for_offset = conn.execute(
+            'SELECT id,seq,duration,zoom_participant_name FROM recordings WHERE project_id=? ORDER BY seq',
+            (project_id,)
+        ).fetchall()
+    else:
+        recs_for_offset = conn.execute(
+            'SELECT id,seq,duration FROM recordings WHERE project_id=? ORDER BY seq', (project_id,)
+        ).fetchall()
     conn.close()
+
+    # Zoom 用：recording_id → 話者ラベル（既に確定済み）
+    zoom_speaker_by_rec_id: dict[int, str] = {}
+    if source == 'zoom':
+        for r in recs_for_offset:
+            try:
+                zoom_speaker_by_rec_id[r['id']] = r['zoom_participant_name'] or ''
+            except (KeyError, IndexError):
+                pass
 
     # recording_id → 録音開始からの累積オフセット(ms)
     offset_by_rec_id = {}
@@ -979,11 +1015,15 @@ async def merge_project(project_id: str,
             if not text:
                 continue
             abs_ms = int(u.get('start') or 0) + base_offset
+            spk = u.get('speaker', 'A')
+            # Zoom MTG では話者ラベルが recording_id で確定（音源分離済み）
+            if source == 'zoom':
+                spk = zoom_speaker_by_rec_id.get(tx['recording_id'], spk) or spk
             run_items[rn].append({
                 'ms': abs_ms,
                 'ts': _ms_to_ts(abs_ms),
                 'text': text,
-                'speaker': u.get('speaker', 'A'),
+                'speaker': spk,
             })
 
     # ── 骨組み（=出力の時間軸）：base 指定優先、無ければ重み最大 ──
@@ -1566,3 +1606,350 @@ async def get_audio(project_id: str, seq: int, _: str = Depends(require_admin)):
     if not rec or not os.path.exists(rec['audio_path']):
         raise HTTPException(404, 'Audio not found')
     return FileResponse(rec['audio_path'], media_type=rec['mime'])
+
+
+# ── Zoom 連携：録画ファイル DL ワーカー ─────────────
+async def _zoom_download_worker(pending_id: int, payload: dict, dl_token: str):
+    """recording_files から participant_audio_files を抽出して個別 DL する。
+
+    話者別音声ファイル（participant_audio）が無い場合は audio_only にフォールバック
+    （話者分離なし＝既存モバイル録音と同等のフロー）。
+    """
+    uuid_     = payload.get('uuid', '')
+    safe_uuid = re.sub(r'[^A-Za-z0-9_-]', '_', uuid_)
+    out_dir   = os.path.join(ZOOM_AUDIO_DIR, safe_uuid)
+    os.makedirs(out_dir, exist_ok=True)
+
+    files = payload.get('recording_files', [])
+
+    # 話者別音声を優先（recording_type=audio_interpretation 等の特殊型も participant_email がある場合は含める）
+    p_audio = [f for f in files
+               if f.get('recording_type') == 'participant_audio'
+               or f.get('participant_email')]
+    targets = p_audio if p_audio else [
+        f for f in files if f.get('recording_type') == 'audio_only'
+    ]
+
+    if not p_audio:
+        logger.warning(
+            f'zoom dl {uuid_}: no participant_audio (fallback to mixed audio)'
+        )
+
+    participants: list[dict] = []
+    try:
+        for f in targets:
+            url = f.get('download_url')
+            if not url:
+                continue
+            raw_name = (
+                f.get('participant_email')
+                or f.get('file_name')
+                or f.get('id', 'unknown')
+            )
+            # ファイル名安全化（英数・日本語・記号一部のみ許可）
+            safe_name = re.sub(r'[^\w\-.@ぁ-んァ-ヴー一-龥]', '_', raw_name)
+            ext = (f.get('file_extension') or 'm4a').lower()
+            dest = os.path.join(out_dir, f'{safe_name}.{ext}')
+
+            await zoom_client.download_file(url, dest, token=dl_token)
+            participants.append({
+                'name': safe_name,
+                'audio_path': dest,
+                'file_size': int(f.get('file_size', 0)),
+            })
+
+        conn = get_conn()
+        conn.execute("""
+            UPDATE zoom_pending
+               SET participants_json=?, downloaded_at=?, status='ready'
+             WHERE id=?
+        """, (
+            json.dumps(participants, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+            pending_id,
+        ))
+        conn.commit()
+        conn.close()
+        logger.info(f'zoom dl {uuid_}: {len(participants)} files done')
+
+    except Exception as e:
+        logger.exception(f'zoom dl {uuid_} failed: {e}')
+        conn = get_conn()
+        conn.execute(
+            "UPDATE zoom_pending SET status='error', error_message=? WHERE id=?",
+            (str(e), pending_id),
+        )
+        conn.commit()
+        conn.close()
+
+
+# ── Zoom 連携：Webhook 受信 ─────────────────────────
+@app.post('/api/zoom/webhook')
+async def zoom_webhook(request: Request):
+    """Zoom Webhook 受信エンドポイント。
+
+    - `endpoint.url_validation`: 初期検証チャレンジに即時応答
+    - `recording.completed`: 署名検証 → zoom_pending 登録 → 非同期DL起動
+    - その他イベント: 無視
+    """
+    body = await request.body()
+    ts   = request.headers.get('x-zm-request-timestamp', '')
+    sig  = request.headers.get('x-zm-signature', '')
+
+    try:
+        data = json.loads(body)
+    except Exception:
+        raise HTTPException(400, 'invalid json')
+
+    # 1) URL Validation Challenge（署名検証より先に処理）
+    if data.get('event') == 'endpoint.url_validation':
+        plain = data.get('payload', {}).get('plainToken', '')
+        return build_url_validation_response(plain, ZOOM_WEBHOOK_SECRET)
+
+    # 2) 通常イベントの署名検証
+    if not verify_signature(body, ts, sig, ZOOM_WEBHOOK_SECRET):
+        logger.warning(f'zoom webhook: invalid signature ts={ts}')
+        raise HTTPException(401, 'invalid signature')
+
+    # 3) recording.completed 以外は無視
+    if data.get('event') != 'recording.completed':
+        logger.info(f"zoom webhook: ignored event={data.get('event')}")
+        return {'status': 'ignored'}
+
+    payload  = data.get('payload', {}).get('object', {})
+    # download_token は payload 直下 or ペイロード内（Zoom API バージョンで揺れる）
+    dl_token = data.get('download_token') \
+               or data.get('payload', {}).get('download_token', '')
+
+    uuid_ = payload.get('uuid', '')
+    conn = get_conn()
+    try:
+        cur = conn.execute("""
+            INSERT INTO zoom_pending
+            (zoom_meeting_id, zoom_uuid, topic, host_email, start_time,
+             duration, participants_json, download_token, status, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (
+            str(payload.get('id', '')), uuid_,
+            payload.get('topic', ''), payload.get('host_email', ''),
+            payload.get('start_time', ''), int(payload.get('duration', 0)),
+            json.dumps(payload.get('recording_files', []), ensure_ascii=False),
+            dl_token, 'pending_download',
+            datetime.now(timezone.utc).isoformat(),
+        ))
+        conn.commit()
+        pending_id = cur.lastrowid
+    except Exception as e:
+        # UNIQUE 違反（同じ MTG の重複 Webhook）は握りつぶす
+        logger.info(f'zoom webhook: duplicate uuid {uuid_} ({e})')
+        conn.close()
+        return {'status': 'duplicate'}
+    conn.close()
+
+    if zoom_client is None:
+        logger.error('zoom webhook: ZOOM_* env vars not configured')
+        raise HTTPException(503, 'zoom integration not configured')
+
+    # バックグラウンドでDL開始
+    asyncio.create_task(_zoom_download_worker(pending_id, payload, dl_token))
+    return {'status': 'accepted', 'pending_id': pending_id}
+
+
+# ── Zoom 連携：取り込み待ち一覧 ─────────────────────
+@app.get('/api/zoom/pending')
+async def zoom_pending_list(_: str = Depends(require_admin)):
+    """取り込み待ち（pending_download / ready / error）の Zoom MTG を返す"""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT id, zoom_meeting_id, zoom_uuid, topic, host_email,
+               start_time, duration, participants_json, status,
+               error_message, created_at, imported_project_id
+          FROM zoom_pending
+         WHERE status IN ('pending_download','ready','error')
+         ORDER BY created_at DESC
+    """).fetchall()
+    conn.close()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d['participants'] = json.loads(d.pop('participants_json') or '[]')
+        except Exception:
+            d['participants'] = []
+        out.append(d)
+    return {'pending': out}
+
+
+# ── Zoom 連携：取り込み実行（projects 作成・音声ファイル配置） ─────
+@app.post('/api/zoom/pending/{pending_id}/import')
+async def zoom_import(pending_id: int, _: str = Depends(require_admin)):
+    """zoom_pending → projects/recordings/participants 化する。
+
+    STT 実行は本 API では行わない。管理画面の既存 Run 設定モーダルから
+    POST /api/projects/{id}/analyze を呼ぶ運用とする（疎結合維持）。
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM zoom_pending WHERE id=? AND status='ready'",
+        (pending_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, 'pending not found or not ready')
+
+    topic        = row['topic'] or 'Zoom MTG'
+    start_time   = row['start_time'] or datetime.now(timezone.utc).isoformat()
+    project_id   = uuid.uuid4().hex
+    project_name = f'{topic} ({start_time[:16]})'
+    proj_dir     = f'/var/jizo/audio/{project_id}'
+    os.makedirs(proj_dir, exist_ok=True)
+
+    conn.execute(
+        '''INSERT INTO projects(id, name, created_at, status, source)
+           VALUES(?, ?, ?, ?, 'zoom')''',
+        (project_id, project_name,
+         datetime.now(timezone.utc).isoformat(), 'uploaded'),
+    )
+
+    participants = json.loads(row['participants_json'] or '[]')
+    rec_ids: list[int] = []
+    for idx, p in enumerate(participants, start=1):
+        src = p['audio_path']
+        ext = os.path.splitext(src)[1] or '.m4a'
+        dst = os.path.join(proj_dir, f'{idx:02d}_{os.path.basename(src)}')
+        try:
+            os.rename(src, dst)
+        except OSError:
+            import shutil
+            shutil.copy2(src, dst)
+
+        mime = 'audio/m4a' if ext.lower() in ('.m4a', '.mp4') else 'audio/wav'
+        cur = conn.execute(
+            '''INSERT INTO recordings
+               (project_id, seq, audio_path, mime, duration, created_at,
+                zoom_participant_name)
+               VALUES(?,?,?,?,?,?,?)''',
+            (project_id, idx, dst, mime, '',
+             datetime.now(timezone.utc).isoformat(),
+             p.get('name', '')),
+        )
+        rec_ids.append(cur.lastrowid)
+        conn.execute(
+            'INSERT INTO participants(project_id, idx, name) VALUES(?,?,?)',
+            (project_id, idx, p.get('name', '')),
+        )
+
+    conn.execute(
+        '''UPDATE zoom_pending
+              SET status='imported', imported_project_id=?
+            WHERE id=?''',
+        (project_id, pending_id),
+    )
+    conn.commit()
+    conn.close()
+
+    logger.info(f'zoom import: project={project_id} recordings={len(rec_ids)}')
+    return {
+        'project_id': project_id,
+        'recordings': len(rec_ids),
+        'name': project_name,
+    }
+
+
+# ── Zoom 連携：取り込み待ち破棄 ─────────────────────
+@app.delete('/api/zoom/pending/{pending_id}')
+async def zoom_pending_delete(pending_id: int,
+                              _: str = Depends(require_admin)):
+    """取り込みせずに破棄。ダウンロード済み音声ファイルも削除する"""
+    conn = get_conn()
+    row = conn.execute(
+        'SELECT zoom_uuid, participants_json FROM zoom_pending WHERE id=?',
+        (pending_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, 'not found')
+
+    try:
+        for p in json.loads(row['participants_json'] or '[]'):
+            try:
+                os.remove(p['audio_path'])
+            except OSError:
+                pass
+        safe_uuid = re.sub(r'[^A-Za-z0-9_-]', '_', row['zoom_uuid'])
+        d = os.path.join(ZOOM_AUDIO_DIR, safe_uuid)
+        if os.path.isdir(d) and not os.listdir(d):
+            os.rmdir(d)
+    finally:
+        conn.execute('DELETE FROM zoom_pending WHERE id=?', (pending_id,))
+        conn.commit()
+        conn.close()
+
+    logger.info(f'zoom pending deleted: id={pending_id}')
+    return {'deleted': pending_id}
+
+
+# ── Zoom 連携：手動アップロード（他組織主催 MTG 用） ──
+@app.post('/api/zoom/upload')
+async def zoom_upload(request: Request,
+                      _: str = Depends(require_admin)):
+    """multipart/form-data:
+       - files[]   : 音声ファイル（.m4a / .mp4 / .wav）
+       - meta      : JSON 文字列 {topic, participants:[{filename, name}]}
+    """
+    form = await request.form()
+    try:
+        meta = json.loads(form.get('meta', '{}'))
+    except Exception:
+        raise HTTPException(400, 'invalid meta json')
+    files = form.getlist('files')
+    if not files:
+        raise HTTPException(400, 'no files uploaded')
+
+    project_id = uuid.uuid4().hex
+    proj_dir   = f'/var/jizo/audio/{project_id}'
+    os.makedirs(proj_dir, exist_ok=True)
+
+    # ファイル名 → 表示話者名のマッピング
+    name_map = {p['filename']: p['name']
+                for p in meta.get('participants', []) if 'filename' in p}
+
+    topic = meta.get('topic', 'Zoom upload')
+
+    conn = get_conn()
+    conn.execute(
+        '''INSERT INTO projects(id, name, created_at, status, source)
+           VALUES(?, ?, ?, ?, 'upload')''',
+        (project_id, topic,
+         datetime.now(timezone.utc).isoformat(), 'uploaded'),
+    )
+
+    for idx, f in enumerate(files, start=1):
+        fname = getattr(f, 'filename', f'audio{idx}.m4a')
+        dst   = os.path.join(proj_dir, f'{idx:02d}_{fname}')
+        content = await f.read()
+        with open(dst, 'wb') as out:
+            out.write(content)
+
+        speaker = name_map.get(fname) or os.path.splitext(fname)[0]
+        mime = getattr(f, 'content_type', None) or 'audio/m4a'
+
+        conn.execute(
+            '''INSERT INTO recordings
+               (project_id, seq, audio_path, mime, duration, created_at,
+                zoom_participant_name)
+               VALUES(?,?,?,?,?,?,?)''',
+            (project_id, idx, dst, mime, '',
+             datetime.now(timezone.utc).isoformat(), speaker),
+        )
+        conn.execute(
+            'INSERT INTO participants(project_id, idx, name) VALUES(?,?,?)',
+            (project_id, idx, speaker),
+        )
+
+    conn.commit()
+    conn.close()
+
+    logger.info(f'zoom upload: project={project_id} files={len(files)}')
+    return {'project_id': project_id, 'recordings': len(files), 'name': topic}
