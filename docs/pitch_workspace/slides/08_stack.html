@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 22pt 40pt 16pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 24pt; color: #1E3A8A; margin: 0 0 6pt; font-weight: 800; }
+.lead { font-size: 12pt; color: #1F2937; margin: 0 0 12pt; line-height: 1.4; }
+.flow { display: flex; align-items: stretch; gap: 4pt; margin-bottom: 14pt; }
+.node {
+  flex: 1; background: #F8FAFC; padding: 10pt 8pt; border-radius: 4pt;
+  border-top: 4pt solid #1E3A8A; min-height: 64pt;
+}
+.ntag { font-size: 8pt; color: #475569; letter-spacing: 1.2pt; margin: 0 0 3pt; font-weight: 700; }
+.nname { font-size: 11pt; color: #1E3A8A; font-weight: 800; margin: 0 0 4pt; line-height: 1.2; }
+.nbody { font-size: 9pt; color: #1F2937; margin: 0; line-height: 1.4; }
+.arrow { display: flex; align-items: center; font-size: 16pt; color: #1E3A8A; font-weight: 700; }
+.stack { background: #FFFFFF; border: 1pt solid #E5E7EB; padding: 10pt 14pt; border-radius: 4pt; }
+.stitle { font-size: 10pt; color: #1E3A8A; font-weight: 700; margin: 0 0 4pt; letter-spacing: 1pt; }
+.stext { font-size: 10pt; color: #1F2937; margin: 0; line-height: 1.45; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">システム構成</p>
+      <h1 class="title">軽量・可搬・自前運用しやすい構成</h1>
+      <p class="lead">モバイル PWA + 1台の VPS で完結。各エンジンは差し替え可能な疎結合。</p>
+      <div class="flow">
+        <div class="node">
+          <p class="ntag">CAPTURE</p>
+          <h4 class="nname">モバイル PWA</h4>
+          <p class="nbody">MediaRecorder + Web Speech + 話者ボタン</p>
+        </div>
+        <div class="arrow"><p>&gt;</p></div>
+        <div class="node">
+          <p class="ntag">CORE</p>
+          <h4 class="nname">VPS</h4>
+          <p class="nbody">FastAPI + SQLite + 静的配信 (Nginx HTTPS)</p>
+        </div>
+        <div class="arrow"><p>&gt;</p></div>
+        <div class="node">
+          <p class="ntag">STT</p>
+          <h4 class="nname">Whisper / Deepgram</h4>
+          <p class="nbody">Run1 / Run2 を別エンジンで二重解析</p>
+        </div>
+        <div class="arrow"><p>&gt;</p></div>
+        <div class="node">
+          <p class="ntag">LLM</p>
+          <h4 class="nname">Gemini 2.5</h4>
+          <p class="nbody">統合 / 要約 / タスク抽出 / Q&A</p>
+        </div>
+        <div class="arrow"><p>&gt;</p></div>
+        <div class="node">
+          <p class="ntag">UI</p>
+          <h4 class="nname">管理画面</h4>
+          <p class="nbody">4カラム比較 / Excel / 編集 UI</p>
+        </div>
+      </div>
+      <div class="stack">
+        <p class="stitle">RUNTIME</p>
+        <p class="stext">Ubuntu 22.04 / Nginx + Let's Encrypt / FastAPI (systemd) / SQLite ファイル DB / Vanilla JS フロント。Docker は使わず scp デプロイ。Zoom 連携は Server-to-Server OAuth。秘匿情報はクライアントに渡さず VPS でプロキシ。</p>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

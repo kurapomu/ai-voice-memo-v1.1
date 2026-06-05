@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AIボイスメモ 管理画面</title>
+<title>AIボイスメモ 管理画面（プロトタイプ）</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -191,14 +191,15 @@ button:disabled{opacity:.4;cursor:default}
   scroll-margin-top:16px;
 }
 #back-to-top{
-  position:fixed; right:24px; bottom:24px; z-index:900;
-  width:44px; height:44px; border-radius:50%;
+  position:fixed; right:3rem; bottom:3rem; z-index:900;
+  width:48px; height:48px; border-radius:50%;
   background:var(--sky); color:#fff; border:0;
-  font-size:18px; font-weight:700; cursor:pointer;
+  font-size:20px; font-weight:700; cursor:pointer;
   box-shadow:0 4px 12px rgba(0,0,0,.4);
   display:none; align-items:center; justify-content:center;
 }
 #back-to-top:hover{ background:#0284c7; }
+#back-to-top.visible{ display:flex; }
 
 /* ── 参考データ ── */
 .ref-seg{display:flex;gap:8px;font-size:14px;padding:5px 0;
@@ -209,7 +210,16 @@ button:disabled{opacity:.4;cursor:default}
 
 /* ── 音声プレイヤー ── */
 .audio-item{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.audio-item label{font-size:13px;color:var(--sub);min-width:60px;flex-shrink:0}
+.audio-item label{
+  font-size:13px;color:var(--sub);
+  width:140px; min-width:140px; max-width:140px; flex-shrink:0;
+  display:flex; flex-direction:column; gap:1px; overflow:hidden;
+}
+.audio-item label .rec-display-name{
+  font-size:10px; color:var(--sub);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:140px;
+}
 audio{flex:1;height:32px}
 .audio-actions{display:flex;flex-direction:column;gap:2px;flex-shrink:0}
 .audio-actions button{
@@ -344,7 +354,7 @@ body.modal-open{overflow:hidden}
 </div>
 
 <header id="app-header">
-  <h1>AIボイスメモ 管理画面</h1>
+  <h1>AIボイスメモ 管理画面（プロトタイプ）</h1>
   <span id="header-sub">MTG一覧</span>
   <button id="btn-open-upload" onclick="openUploadModal()"
     style="margin-left:auto;background:#22c55e;border:1px solid #22c55e;
@@ -751,6 +761,13 @@ body.modal-open{overflow:hidden}
         </div>
       </div>
 
+      <!-- セクションアンカーナビ（右カラムの最上部） -->
+      <nav id="section-nav" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 0;margin:0 0 12px;border-bottom:1px solid var(--border)">
+        <a href="#qa-section" class="anchor-link">文字起こしへの質問</a>
+        <a href="#section-aai-wrap" class="anchor-link">Whisper 解析結果</a>
+        <a href="#section-ref-wrap" class="anchor-link">参考データ（Web Speech + 話者ボタン）</a>
+      </nav>
+
       <!-- アクションバー -->
       <div class="action-bar">
         <span class="run-label">Run1</span>
@@ -769,13 +786,6 @@ body.modal-open{overflow:hidden}
         <button id="btn-copy-all" class="btn-ghost">全文コピー</button>
       </div>
       <div id="poll-status" style="display:none"></div>
-
-      <!-- セクションアンカーナビ -->
-      <nav id="section-nav" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 0;margin:4px 0 12px;border-bottom:1px solid var(--border)">
-        <a href="#qa-section" class="anchor-link">文字起こしへの質問</a>
-        <a href="#section-aai-wrap" class="anchor-link">Whisper 解析結果</a>
-        <a href="#section-ref-wrap" class="anchor-link">参考データ（Web Speech + 話者ボタン）</a>
-      </nav>
 
       <!-- 音声プレイヤー（LLM最終版より上に配置） -->
       <div class="section">
@@ -1451,10 +1461,23 @@ function renderRecordings(p) {
     actions.querySelector('.audio-down').onclick = () => moveRecording(p, i, +1);
     div.appendChild(actions);
 
-    const speakerSuffix = rec.zoom_participant_name ? ` (${rec.zoom_participant_name})` : '';
     const label = document.createElement('label');
-    label.textContent = `録音${i + 1}${speakerSuffix}`;
+    const labelMain = document.createElement('div');
+    labelMain.style.cssText = 'font-weight:600;color:var(--text);font-size:13px';
+    labelMain.textContent = `録音${i + 1}`;
+    const labelSub = document.createElement('div');
+    labelSub.className = 'rec-display-name';
+    labelSub.title = rec.display_name || '';
+    labelSub.textContent = rec.display_name || '';
+    label.appendChild(labelMain);
+    label.appendChild(labelSub);
     div.appendChild(label);
+
+    const durEl = document.createElement('span');
+    durEl.className = 'rec-duration';
+    durEl.style.cssText = 'font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums;flex-shrink:0;min-width:42px;text-align:right';
+    durEl.textContent = '--:--';
+    div.appendChild(durEl);
 
     apiFetch(`/api/audio/${p.id}/${rec.seq}`)
       .then(r => r.blob())
@@ -1462,11 +1485,37 @@ function renderRecordings(p) {
         const url = URL.createObjectURL(blob);
         const audio = document.createElement('audio');
         audio.controls = true;
+        audio.preload = 'metadata';
         audio.src = url;
-        div.appendChild(audio);
+        div.insertBefore(audio, durEl);
+        // webm の duration=Infinity 問題：seek hack で実時間を取得
+        const setDur = () => {
+          const d = audio.duration;
+          if (isFinite(d) && d > 0) {
+            const m = Math.floor(d / 60);
+            const s = Math.floor(d % 60).toString().padStart(2, '0');
+            durEl.textContent = `${m}:${s}`;
+          }
+        };
+        audio.addEventListener('loadedmetadata', () => {
+          if (!isFinite(audio.duration)) {
+            // 巨大値へ seek → durationchange で正確値が入る
+            audio.currentTime = 1e10;
+            audio.addEventListener('durationchange', () => {
+              setDur();
+              try { audio.currentTime = 0; } catch(e) {}
+            }, {once: true});
+          } else {
+            setDur();
+          }
+        });
         const dl = document.createElement('a');
+        const ext = (rec.mime || '').includes('webm') ? 'webm' :
+                    (rec.mime || '').includes('mp4')  ? 'mp4'  :
+                    (rec.mime || '').includes('wav')  ? 'wav'  :
+                    (rec.mime || '').includes('mp3')  ? 'mp3'  : 'audio';
         dl.href = url;
-        dl.download = `rec_${i + 1}.webm`;
+        dl.download = `${(rec.display_name || `rec_${i+1}`).replace(/[\\/:*?"<>|]/g,'_')}.${ext}`;
         dl.textContent = '↓';
         dl.title = 'ダウンロード';
         dl.style.cssText = 'color:var(--sky);font-size:18px;text-decoration:none;flex-shrink:0;padding:0 4px';
@@ -2800,26 +2849,36 @@ function closeDeleteModal() {
 }
 
 // ── ページ上部へ戻るボタン ──
-(function setupBackToTop(){
-  const btn = document.getElementById('back-to-top');
-  if (!btn) return;
-  // main パネルがスクロールコンテナ。なければ window でフォールバック
+function setupBackToTop(){
+  let btn = document.getElementById('back-to-top');
+  if (!btn) {
+    // ボタンがDOMに無ければ動的生成（順序依存を回避）
+    btn = document.createElement('button');
+    btn.id = 'back-to-top';
+    btn.type = 'button';
+    btn.title = 'ページ上部へ戻る';
+    btn.setAttribute('aria-label', 'ページ上部へ戻る');
+    btn.textContent = '↑';
+    document.body.appendChild(btn);
+  }
   const main = document.getElementById('main');
-  const target = main && main.scrollHeight > main.clientHeight ? main : window;
-  const getY = () => target === window ? window.scrollY : main.scrollTop;
+  const getY = () => (main && main.scrollTop) || window.scrollY || document.documentElement.scrollTop || 0;
   const onScroll = () => {
-    btn.style.display = getY() > 400 ? 'flex' : 'none';
+    btn.classList.toggle('visible', getY() > 300);
   };
-  if (target === window) window.addEventListener('scroll', onScroll, {passive:true});
-  else main.addEventListener('scroll', onScroll, {passive:true});
+  main && main.addEventListener('scroll', onScroll, {passive:true});
+  window.addEventListener('scroll', onScroll, {passive:true});
   btn.addEventListener('click', () => {
-    if (target === window) window.scrollTo({top:0, behavior:'smooth'});
-    else main.scrollTo({top:0, behavior:'smooth'});
+    if (main && main.scrollTop > 0) main.scrollTo({top:0, behavior:'smooth'});
+    else window.scrollTo({top:0, behavior:'smooth'});
   });
   onScroll();
-  // selectProject 等で main の中身が差し替わった後にも再評価したいので setInterval は最低限
-  setInterval(onScroll, 1500);
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', setupBackToTop);
+} else {
+  setupBackToTop();
+}
 
 // ── 初期化 ──
 if (authHeader) loadProjects();

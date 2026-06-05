@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 22pt 40pt 16pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 24pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.lead { font-size: 12pt; color: #1F2937; margin: 0 0 12pt; line-height: 1.4; }
+.cols { display: flex; gap: 16pt; align-items: flex-start; }
+.col { display: flex; flex-direction: column; }
+.colh { font-size: 13pt; color: #1E3A8A; font-weight: 800; margin: 0 0 4pt; }
+.colsub { font-size: 10pt; color: #475569; margin: 0 0 6pt; line-height: 1.4; }
+.ph-mob { width: 110pt; height: 188pt; background: #E5E7EB; border-radius: 4pt; }
+.ph-adm { width: 360pt; height: 188pt; background: #E5E7EB; border-radius: 4pt; }
+.col-mob { width: 130pt; }
+.col-adm { width: 380pt; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">UI ツアー</p>
+      <h1 class="title">実際の画面</h1>
+      <p class="lead">モバイル PWA はシンプルな録音セットアップ。管理画面はプロジェクト管理・Zoom 取り込み・各種解析を一つの場所に集約。</p>
+      <div class="cols">
+        <div class="col col-mob">
+          <h3 class="colh">モバイル PWA</h3>
+          <p class="colsub">MTG名・参加者・ビットレート（64kbps 推奨）を設定して録音開始。</p>
+          <div id="ph-mob" class="placeholder ph-mob"></div>
+        </div>
+        <div class="col col-adm">
+          <h3 class="colh">管理画面</h3>
+          <p class="colsub">プロジェクト一覧・Zoom 取り込み・音声ファイル追加をサイドバーに集約。MTG履歴は最終版バッジ付きで一覧表示。</p>
+          <div id="ph-adm" class="placeholder ph-adm"></div>
+        </div>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

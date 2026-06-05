@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 22pt 44pt 16pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 24pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.lead { font-size: 12pt; color: #1F2937; margin: 0 0 12pt; line-height: 1.4; }
+.grid { display: flex; gap: 12pt; }
+.cell { flex: 1; padding: 12pt 14pt; background: #F8FAFC; border-radius: 4pt; border-top: 4pt solid #1E3A8A; }
+.cellnum { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; font-weight: 700; }
+.cellname { font-size: 14pt; color: #1E3A8A; font-weight: 800; margin: 0 0 8pt; }
+.cellul { margin: 0; padding-left: 14pt; }
+.cellul li { font-size: 10pt; color: #1F2937; margin-bottom: 3pt; line-height: 1.4; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">編集と運用</p>
+      <h1 class="title">人手による補正を低コストで</h1>
+      <p class="lead">完全自動を目指さず、人間が必要な箇所だけ素早く直せる UI を提供する。</p>
+      <div class="grid">
+        <div class="cell">
+          <p class="cellnum">EDIT 01</p>
+          <h3 class="cellname">行ごとの話者修正</h3>
+          <ul class="cellul">
+            <li>LLM 最終版の話者ラベルをクリックでドロップダウン化</li>
+            <li>参加者リストから1クリックで差し替え</li>
+            <li>再マージ不要・Excel 出力にも即同期</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <p class="cellnum">EDIT 02</p>
+          <h3 class="cellname">録音音声の追加・順序入替</h3>
+          <ul class="cellul">
+            <li>↑↓ ボタンで録音の順序を即時入替</li>
+            <li>追加収録した音声を後から差し込み可能</li>
+            <li>古い解析結果には警告バナーで再実行を促す</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <p class="cellnum">EDIT 03</p>
+          <h3 class="cellname">マージパラメータ調整</h3>
+          <ul class="cellul">
+            <li>チャンクサイズ・並列度・主軸選定アルゴリズムを画面で変更</li>
+            <li>重み（Web Speech : Run1 : Run2 = 10合計）でテキスト採用バランスを制御</li>
+            <li>運用デフォルトは Whisper 主軸（1:7:2）</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

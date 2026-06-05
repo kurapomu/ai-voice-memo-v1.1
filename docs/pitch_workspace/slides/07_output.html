@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 22pt 44pt 16pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 24pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.lead { font-size: 12pt; color: #1F2937; margin: 0 0 12pt; line-height: 1.4; }
+.row { display: flex; gap: 12pt; margin-bottom: 10pt; }
+.block { flex: 1; padding: 12pt 14pt; background: #F8FAFC; border-radius: 4pt; border-left: 6pt solid #1E3A8A; }
+.bname { font-size: 14pt; color: #1E3A8A; font-weight: 800; margin: 0 0 6pt; }
+.bbody { font-size: 10pt; color: #1F2937; margin: 0; line-height: 1.45; }
+.list { margin: 4pt 0 0; padding-left: 14pt; }
+.list li { font-size: 10pt; color: #1F2937; margin-bottom: 3pt; line-height: 1.4; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">出力と二次活用</p>
+      <h1 class="title">議事録の先まで一気通貫で活用</h1>
+      <p class="lead">編集結果は同じデータソースから複数フォーマットへ自動展開される。</p>
+      <div class="row">
+        <div class="block">
+          <h3 class="bname">4 カラム比較ビュー</h3>
+          <p class="bbody">LLM 最終版 / Web Speech / Run1 / Run2 を横並びで参照。要確認タグも集約表示。</p>
+        </div>
+        <div class="block">
+          <h3 class="bname">Excel エクスポート</h3>
+          <p class="bbody">Transcript / Summary / Tasks / Issues の4シート構造で社内共有・監査対応にそのまま使える。</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="block">
+          <h3 class="bname">要約・タスク抽出</h3>
+          <ul class="list">
+            <li>200〜400字の会議サマリ</li>
+            <li>担当者付きの残タスク箇条書き</li>
+            <li>Gemini Flash / Pro を画面から選択</li>
+          </ul>
+        </div>
+        <div class="block">
+          <h3 class="bname">文字起こしへの Q&A</h3>
+          <ul class="list">
+            <li>会議内容に自然言語で質問できる</li>
+            <li>履歴は qa_history に保存・再参照可</li>
+            <li>要点抽出・特定話者の発言のみ抽出など柔軟運用</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

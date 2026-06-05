@@ -1996,10 +1996,37 @@ async def get_project(project_id: str, _: str = Depends(require_admin)):
         'SELECT idx,name FROM participants WHERE project_id=? ORDER BY idx', (project_id,)
     ).fetchall()]
 
-    recordings = [dict(r) for r in conn.execute(
-        'SELECT id,seq,mime,duration,created_at FROM recordings WHERE project_id=? ORDER BY seq',
+    recordings_raw = [dict(r) for r in conn.execute(
+        'SELECT id,seq,mime,duration,created_at,audio_path,zoom_participant_name '
+        'FROM recordings WHERE project_id=? ORDER BY seq',
         (project_id,)
     ).fetchall()]
+    recordings = []
+    for r in recordings_raw:
+        # 表示名（順序入替後も識別可能な安定値）
+        basename = os.path.basename(r.get('audio_path') or '')
+        # 先頭の "01_" のような連番prefix除去（追加アップロードで付与される）
+        stripped = re.sub(r'^\d{1,3}_', '', basename)
+        # モバイル録音は "{project_id}_{seq}.{ext}" 形式 → 友好名なしと判定
+        is_mobile_path = bool(
+            basename.startswith(f"{project_id}_") or
+            re.match(r'^[a-f0-9-]{20,}_\d+\.[a-z0-9]+$', basename, re.IGNORECASE)
+        )
+        # 拡張子も削る
+        name_no_ext = re.sub(r'\.[a-z0-9]+$', '', stripped, flags=re.IGNORECASE)
+        if r.get('zoom_participant_name'):
+            display_name = r['zoom_participant_name']
+        elif is_mobile_path or not name_no_ext:
+            display_name = f"作成 {(r.get('created_at') or '')[5:16].replace('T',' ')}"
+        else:
+            display_name = name_no_ext
+        # UI で確実に表示揃えしたいので 24文字で切り詰め（…付き）
+        if len(display_name) > 24:
+            display_name = display_name[:23] + '…'
+        r['display_name'] = display_name
+        # audio_path はパス漏洩防止で除外
+        r.pop('audio_path', None)
+        recordings.append(r)
 
     ref_segs = [dict(r) for r in conn.execute(
         'SELECT seq,text,speaker_idx,ts,highlight FROM ref_segments WHERE project_id=? ORDER BY seq',

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 24pt 44pt 16pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 26pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.lead { font-size: 12pt; color: #1F2937; margin: 0 0 14pt; line-height: 1.4; }
+.row { display: flex; gap: 12pt; }
+.col {
+  flex: 1; background: #F8FAFC; padding: 12pt 14pt;
+  border-radius: 4pt; border-top: 4pt solid #1E3A8A;
+}
+.cname { font-size: 13pt; color: #1E3A8A; font-weight: 800; margin: 0 0 6pt; }
+.cul { margin: 0; padding-left: 14pt; }
+.cul li { font-size: 10pt; color: #1F2937; margin-bottom: 3pt; line-height: 1.4; }
+.cta {
+  background: #1E3A8A; color: #FFFFFF;
+  padding: 10pt 14pt; border-radius: 4pt; margin-top: 12pt;
+}
+.ctatitle { font-size: 10pt; color: #FFFFFF; letter-spacing: 1.5pt; margin: 0 0 2pt; font-weight: 700; }
+.ctatext { font-size: 11pt; color: #FFFFFF; margin: 0; line-height: 1.4; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">ロードマップ</p>
+      <h1 class="title">次に伸ばす方向</h1>
+      <p class="lead">プロトタイプの土台はできた。次は活用幅と安全性を広げる。</p>
+      <div class="row">
+        <div class="col">
+          <h3 class="cname">機能拡張</h3>
+          <ul class="cul">
+            <li>Claude Haiku 4.5 を要約・Q&A の選択肢に追加</li>
+            <li>用途別テンプレート（会議・インタビュー・講義）</li>
+            <li>モバイル PWA の一時停止 / 再開フロー</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3 class="cname">安全性と運用</h3>
+          <ul class="cul">
+            <li>Presidio + GiNZA による PII 自動マスキング</li>
+            <li>プライバシーポリシー整備と公開</li>
+            <li>監査ログ強化・組織共有・権限管理</li>
+          </ul>
+        </div>
+      </div>
+      <div class="cta">
+        <p class="ctatitle">TRY THE PROTOTYPE</p>
+        <p class="ctatext">jizo-dev.com/ai-voice-memo / 管理画面: jizo-dev.com/ai-voice-memo/admin/</p>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

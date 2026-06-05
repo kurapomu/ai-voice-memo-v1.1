@@ -399,10 +399,10 @@ const DB_NAME = 'VoiceMemo', DB_VER = 1, STORE = 'recordings';
 const TTL_MS = 24 * 60 * 60 * 1000;  // IndexedDB 24時間TTL
 
 const BITRATE_OPTIONS = [
-  {value: 32000,  label: '32kbps', note: '省サイズ・電話品質'},
-  {value: 64000,  label: '64kbps', note: '推奨・VoIP品質'},
-  {value: 96000,  label: '96kbps', note: '高品質'},
-  {value: 128000, label: '128kbps', note: '最高品質・ファイル大'},
+  {value: 32000,  label: '32kbps', note: '省サイズ・電話品質', badge: ''},
+  {value: 64000,  label: '64kbps', note: '推奨・VoIP品質', badge: '★推奨'},
+  {value: 96000,  label: '96kbps', note: 'ASR目的には過剰（精度向上なし・容量増）', badge: '⚠ 過剰'},
+  {value: 128000, label: '128kbps', note: 'ASR目的には過剰（精度向上なし・容量大）', badge: '⚠ 過剰'},
 ];
 function getAudioBitrate() {
   const v = parseInt(localStorage.getItem('audio_bitrate') || '64000', 10);
@@ -420,14 +420,20 @@ function renderBitrateSelector() {
   BITRATE_OPTIONS.forEach(o => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = o.label;
-    btn.style.cssText = `flex:1;min-width:70px;padding:10px 8px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;border:1px solid ${o.value === cur ? '#3b82f6' : 'var(--border)'};background:${o.value === cur ? '#3b82f6' : 'var(--surface)'};color:${o.value === cur ? '#fff' : 'var(--text)'}`;
+    const isSel = o.value === cur;
+    const isRecommended = o.value === 64000;
+    const isExcess = o.value >= 96000;
+    btn.innerHTML = `<div>${o.label}</div>${o.badge ? `<div style="font-size:10px;font-weight:700;margin-top:2px;${isRecommended ? 'color:#facc15' : 'color:#fb923c'}">${o.badge}</div>` : ''}`;
+    btn.style.cssText = `flex:1;min-width:80px;padding:10px 8px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;text-align:center;border:1px solid ${isSel ? '#3b82f6' : (isRecommended ? '#22c55e' : 'var(--border)')};background:${isSel ? '#3b82f6' : 'var(--surface)'};color:${isSel ? '#fff' : 'var(--text)'};${isExcess && !isSel ? 'opacity:0.7;' : ''}`;
     btn.addEventListener('click', () => setAudioBitrate(o.value));
     wrap.appendChild(btn);
   });
   const note = document.getElementById('bitrate-note');
   const sel = BITRATE_OPTIONS.find(o => o.value === cur);
-  if (note && sel) note.textContent = `現在: ${sel.label} (${sel.note})  ※次の録音から反映されます`;
+  if (note && sel) {
+    note.innerHTML = `現在: <strong>${sel.label}</strong>（${sel.note}）<br>
+      <span style="color:var(--sub);font-size:11px">※次の録音から反映 / 文字起こし精度は64kbpsで頭打ち。96・128kbpsは容量だけ増えてASR精度は変わりません</span>`;
+  }
 }
 
 // ══════════════════════════════════════

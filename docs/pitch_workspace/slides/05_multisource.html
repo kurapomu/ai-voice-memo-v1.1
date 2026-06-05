@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 22pt 44pt 16pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 24pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.lead { font-size: 12pt; color: #1F2937; margin: 0 0 12pt; line-height: 1.4; }
+.cards { display: flex; gap: 12pt; }
+.card {
+  flex: 1; background: #F8FAFC; padding: 12pt 14pt 14pt;
+  border-radius: 4pt; border-left: 6pt solid #1E3A8A;
+}
+.ctag { font-size: 9pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; font-weight: 700; }
+.ctitle { font-size: 14pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.cul { margin: 0; padding-left: 14pt; }
+.cul li { font-size: 10pt; color: #1F2937; margin-bottom: 3pt; line-height: 1.4; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">入力ソース</p>
+      <h1 class="title">3 種類の入力を同じパイプラインへ</h1>
+      <p class="lead">対面・オンライン・既存音声のどれでも、同じ4カラム比較ビュー・要約・Excel エクスポートまで一本道。</p>
+      <div class="cards">
+        <div class="card">
+          <p class="ctag">SOURCE 1</p>
+          <h3 class="ctitle">モバイル PWA</h3>
+          <ul class="cul">
+            <li>iPhone Safari からホーム画面追加で起動</li>
+            <li>20分自動 pause・残時間表示・STT 無反応バナー</li>
+            <li>IndexedDB 退避で電波切れにも強い</li>
+            <li>録音中の話者ボタンが話者確定の決め手</li>
+          </ul>
+        </div>
+        <div class="card">
+          <p class="ctag">SOURCE 2</p>
+          <h3 class="ctitle">Zoom Cloud Recording</h3>
+          <ul class="cul">
+            <li>管理画面の一覧から1件ずつ取り込み（Pull 型）</li>
+            <li>参加者別音声の分離トラックで話者100%確定</li>
+            <li>Webhook は通知のみ。意図しない自動 DL なし</li>
+            <li>Server-to-Server OAuth で自アカウント録画を取得</li>
+          </ul>
+        </div>
+        <div class="card">
+          <p class="ctag">SOURCE 3</p>
+          <h3 class="ctitle">任意音声ファイル</h3>
+          <ul class="cul">
+            <li>m4a / mp4 / wav / mp3 / webm / ogg / flac 対応</li>
+            <li>複数選択でファイル=話者として分離取り込み</li>
+            <li>1ファイル最大100MB・最大60分（クライアント検証）</li>
+            <li>ICレコーダー・スマホ・他社会議システム録画も同じ流れで処理</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

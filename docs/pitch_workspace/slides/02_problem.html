@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 36pt 56pt 24pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 6pt; }
+.title { font-size: 28pt; color: #1E3A8A; margin: 0 0 18pt; font-weight: 800; }
+.lead { font-size: 14pt; color: #1F2937; margin: 0 0 22pt; line-height: 1.45; }
+.problems { display: flex; gap: 16pt; margin: 0; }
+.card {
+  flex: 1; background: #F8FAFC; border-left: 6pt solid #1E3A8A;
+  padding: 16pt 18pt; border-radius: 4pt;
+}
+.cardnum { font-size: 24pt; color: #1E3A8A; font-weight: 900; margin: 0; line-height: 1; }
+.cardtitle { font-size: 14pt; color: #1F2937; font-weight: 700; margin: 6pt 0 6pt; }
+.cardbody { font-size: 12pt; color: #475569; margin: 0; line-height: 1.5; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">問題提起</p>
+      <h1 class="title">既存の文字起こしツールの3つの弱点</h1>
+      <p class="lead">対面MTGを記録する用途では、自動文字起こしだけでは精度・運用コストの面で限界が見える。</p>
+      <div class="problems">
+        <div class="card">
+          <p class="cardnum">01</p>
+          <p class="cardtitle">話者分離精度</p>
+          <p class="cardbody">同一マイク収録だと AI 単独では発話者を高精度で分けきれない。複数人が同時に話す場面で破綻しやすい。</p>
+        </div>
+        <div class="card">
+          <p class="cardnum">02</p>
+          <p class="cardtitle">話者の取り違え</p>
+          <p class="cardbody">話者ラベルが Speaker A / B のまま残り、誰が何を言ったか後から特定する作業が大きな負担になる。</p>
+        </div>
+        <div class="card">
+          <p class="cardnum">03</p>
+          <p class="cardtitle">後修正コスト</p>
+          <p class="cardbody">出力が一気通貫の固まりで、特定行だけの修正、追加収録の差し込み、順序入れ替えが困難。</p>
+        </div>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

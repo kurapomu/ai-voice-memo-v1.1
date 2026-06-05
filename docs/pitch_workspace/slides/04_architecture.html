@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 24pt 48pt 18pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 24pt; color: #1E3A8A; margin: 0 0 4pt; font-weight: 800; }
+.subtitle { font-size: 12pt; color: #475569; margin: 0 0 12pt; }
+.steps { display: flex; gap: 6pt; margin: 0 0 12pt; }
+.step {
+  flex: 1; background: #F8FAFC; padding: 10pt 10pt 12pt;
+  border-radius: 4pt; border-top: 4pt solid #1E3A8A;
+}
+.stepnum { font-size: 16pt; color: #1E3A8A; font-weight: 900; margin: 0; line-height: 1; }
+.stepname { font-size: 11pt; color: #1F2937; font-weight: 700; margin: 4pt 0 2pt; line-height: 1.3; }
+.stepbody { font-size: 9.5pt; color: #475569; margin: 0; line-height: 1.4; }
+.guarantee { background: #FFFFFF; border: 1pt solid #E5E7EB; padding: 10pt 14pt; border-radius: 4pt; }
+.gtitle { font-size: 11pt; color: #1E3A8A; font-weight: 700; margin: 0 0 4pt; letter-spacing: 1pt; }
+.gul { margin: 0; padding-left: 16pt; }
+.gul li { font-size: 10.5pt; color: #1F2937; margin-bottom: 2pt; line-height: 1.45; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">アーキテクチャ</p>
+      <h1 class="title">ゼロ欠落・時系列整流の5フェーズ設計</h1>
+      <p class="subtitle">LLM が勝手に行を増減できない構造で、品質と再現性を両立する。</p>
+      <div class="steps">
+        <div class="step"><p class="stepnum">01</p><p class="stepname">主軸選定</p><p class="stepbody">完了済ソースから最大量1本を骨組みに選ぶ（決定論）。</p></div>
+        <div class="step"><p class="stepnum">02</p><p class="stepname">行構築</p><p class="stepbody">主軸と他ソースを時刻＋類似度で束ね、外れ発話はオーファンとして時系列に挿入。</p></div>
+        <div class="step"><p class="stepnum">03</p><p class="stepname">話者解決</p><p class="stepbody">押下イベント→直前継承→Web Speech→未設定の優先度で話者を確定。</p></div>
+        <div class="step"><p class="stepnum">04</p><p class="stepname">LLM整流</p><p class="stepbody">チャンク分割並列で候補を句読点整形・選択。行追加・削除・並べ替えは禁止。</p></div>
+        <div class="step"><p class="stepnum">05</p><p class="stepname">強制整合</p><p class="stepbody">候補に無い4文字以上連続部分文字列は LLM 過剰補填と判定し主軸テキストへ戻す。</p></div>
+      </div>
+      <div class="guarantee">
+        <p class="gtitle">3 GUARANTEES</p>
+        <ul class="gul">
+          <li>ゼロ欠落 - 主軸全行とオーファン発話を必ず含める</li>
+          <li>時系列順 - 主軸1本に揃え、LLM は行順を変えられない</li>
+          <li>LLM 障害耐性 - チャンク失敗時は主軸生テキストでフォールバック</li>
+        </ul>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>

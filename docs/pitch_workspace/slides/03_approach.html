@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html><head><style>
+html { background: #FFFFFF; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex; color: #1F2937;
+}
+.accent { width: 12pt; height: 100%; background: #1E3A8A; flex-shrink: 0; }
+.main { flex: 1; padding: 28pt 48pt 20pt; display: flex; flex-direction: column; justify-content: space-between; }
+.meta { font-size: 10pt; color: #475569; letter-spacing: 1.5pt; margin: 0 0 4pt; }
+.title { font-size: 26pt; color: #1E3A8A; margin: 0 0 10pt; font-weight: 800; }
+.lead { font-size: 13pt; color: #1F2937; margin: 0 0 14pt; line-height: 1.4; }
+.cols { display: flex; gap: 18pt; }
+.col {
+  flex: 1; background: #F8FAFC; padding: 14pt 16pt;
+  border-top: 4pt solid #1E3A8A; border-radius: 4pt;
+}
+.coltag { font-size: 10pt; color: #475569; letter-spacing: 1.2pt; margin: 0 0 4pt; font-weight: 700; }
+.colhead { font-size: 16pt; color: #1E3A8A; margin: 0 0 8pt; font-weight: 800; }
+.colhead small { font-size: 10pt; color: #475569; font-weight: 400; display: block; margin-top: 2pt; }
+.colul { margin: 0; padding-left: 16pt; }
+.colul li { font-size: 11pt; color: #1F2937; margin-bottom: 4pt; line-height: 1.45; }
+.footer { font-size: 9pt; color: #475569; margin: 0; }
+</style></head>
+<body>
+  <div class="accent"></div>
+  <div class="main">
+    <div>
+      <p class="meta">解決アプローチ</p>
+      <h1 class="title">二段階方式 - 人間 × AI の役割分担</h1>
+      <p class="lead">録音中に人間が「誰が話したか」を担い、後処理で AI が「何を話したか」を担う。最後に LLM が両者を統合する。</p>
+      <div class="cols">
+        <div class="col">
+          <p class="coltag">REAL-TIME LAYER</p>
+          <h3 class="colhead">リアルタイム層<small>記録時にだけ可能な情報を取り逃さない</small></h3>
+          <ul class="colul">
+            <li>Web Speech API で録音中に即時文字起こし</li>
+            <li>話者ボタン押下で話者を確定（人手・最高信頼）</li>
+            <li>20分自動 pause、STT 無反応バナーで安全運用</li>
+          </ul>
+        </div>
+        <div class="col">
+          <p class="coltag">POST-PROCESS LAYER</p>
+          <h3 class="colhead">後処理層<small>大量データを高品質テキストに整える</small></h3>
+          <ul class="colul">
+            <li>OpenAI Whisper でテキスト精度を確保（Run1）</li>
+            <li>Deepgram Nova-3 で話者分離と分節（Run2）</li>
+            <li>Run1 と Run2 のエンジン・モデルは個別に選択可能</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="footer">Prototype - jizo-dev.com/ai-voice-memo</p>
+  </div>
+</body></html>
