@@ -1992,10 +1992,11 @@ function renderRefSegments(p) {
 
 // ── 設定モーダル ──
 const SVC_LABELS = {
-  'whisper':      {name:'OpenAI Whisper',  short:'分'},
-  'deepgram':     {name:'Deepgram',         short:'分'},
-  'gemini-flash': {name:'Gemini 2.5 Flash', short:'req'},
-  'gemini-pro':   {name:'Gemini 2.5 Pro',   short:'req'},
+  'whisper':      {name:'OpenAI Whisper',    short:'分'},
+  'deepgram':     {name:'Deepgram',           short:'分'},
+  'gemini-flash': {name:'Gemini 2.5 Flash',   short:'req'},
+  'gemini-pro':   {name:'Gemini 2.5 Pro',     short:'req'},
+  'claude-haiku': {name:'Claude Haiku 4.5',   short:'req'},
 };
 
 // ── LLM突合設定（localStorage） ──
@@ -2264,6 +2265,13 @@ const SVC_INFO = {
     price: 'Flash $0.075/1M tok入力, $0.30/1M tok出力',
     note: '無料枠あり（15 RPM/1500日）。有料化にはGCPプロジェクト＋請求先設定。',
   },
+  anthropic: {
+    url:  'https://console.anthropic.com/settings/keys',
+    cc:   '必須',
+    ccColor: 'var(--red)',
+    price: 'Haiku 4.5 $1.00/1M tok入力, $5.00/1M tok出力',
+    note: '前払いクレジット制。最小$5〜チャージ。Console から発行。',
+  },
 };
 
 function renderApiKeys(keys) {
@@ -2274,7 +2282,10 @@ function renderApiKeys(keys) {
   const editKeyMap = {'whisper':'whisper','deepgram':'deepgram','gemini-flash':'gemini'};
   showOrder.forEach(svc => {
     const k = keys[svc];
-    const label = svc === 'gemini-flash' ? 'Google Gemini' : SVC_LABELS[svc].name;
+    if (!k) return;
+    const label = svc === 'gemini-flash' ? 'Google Gemini'
+                : svc === 'claude-haiku' ? 'Anthropic Claude'
+                : SVC_LABELS[svc].name;
     const editKey = editKeyMap[svc];
     const info = SVC_INFO[editKey];
     const div = document.createElement('div');
@@ -2628,6 +2639,10 @@ document.getElementById('btn-merge').addEventListener('click', async () => {
   const id = currentProjectId;
   if (!id) return;
   const model = document.getElementById('model-select').value;
+  if (model.startsWith('claude')) {
+    alert('LLM 最終版マージは Gemini モデルのみ対応です。Gemini 2.5 Flash か Pro を選択してください。');
+    return;
+  }
   const btn = document.getElementById('btn-merge');
   btn.disabled = true;
   btn.textContent = '生成中… (30〜60秒)';

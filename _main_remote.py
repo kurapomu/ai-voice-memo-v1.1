@@ -41,6 +41,8 @@ GEMINI_BASE   = 'https://generativelanguage.googleapis.com/v1beta/openai'
 OPENAI_KEY    = os.environ.get('OPENAI_API_KEY', '')
 DEEPGRAM_KEY  = os.environ.get('DEEPGRAM_API_KEY', '')
 DEEPGRAM_BASE = 'https://api.deepgram.com/v1'
+ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+ANTHROPIC_BASE = 'https://api.anthropic.com/v1'
 
 # ── Zoom 連携（v1） ──────────────────────────────
 ZOOM_CLIENT_ID      = os.environ.get('ZOOM_CLIENT_ID', '')
@@ -84,6 +86,14 @@ USAGE_LIMITS = {
         'rate_usd_per_1m_out': 10.00,
         'free_tier_note': '無料枠: 100req/日・5req/分',
     },
+    'claude-haiku': {
+        'daily_requests': 500,
+        'daily_tokens':   1_000_000,
+        'monthly_requests': 15_000,
+        'rate_usd_per_1m_in':  1.00,
+        'rate_usd_per_1m_out': 5.00,
+        'free_tier_note': '前払いクレジット（最小$5）',
+    },
 }
 
 def _service_key(engine_or_model: str) -> str:
@@ -91,6 +101,7 @@ def _service_key(engine_or_model: str) -> str:
     e = (engine_or_model or '').lower()
     if e == 'whisper' or 'whisper' in e: return 'whisper'
     if e == 'deepgram' or 'nova' in e:   return 'deepgram'
+    if 'haiku' in e and 'claude' in e:   return 'claude-haiku'
     if 'flash' in e: return 'gemini-flash'
     if 'pro'   in e: return 'gemini-pro'
     return e or 'unknown'
@@ -452,9 +463,10 @@ async def update_api_keys(request: Request, _: str = Depends(require_admin)):
 
     # キー名 → .envの変数名
     KEY_MAP = {
-        'whisper':  'OPENAI_API_KEY',
-        'deepgram': 'DEEPGRAM_API_KEY',
-        'gemini':   'GEMINI_API_KEY',
+        'whisper':   'OPENAI_API_KEY',
+        'deepgram':  'DEEPGRAM_API_KEY',
+        'gemini':    'GEMINI_API_KEY',
+        'anthropic': 'ANTHROPIC_API_KEY',
     }
     updates = {}
     for k, env_name in KEY_MAP.items():
@@ -500,7 +512,7 @@ async def update_api_keys(request: Request, _: str = Depends(require_admin)):
         f.writelines(new_lines)
 
     # プロセス内変数を更新（再起動なしで反映）
-    global OPENAI_KEY, DEEPGRAM_KEY, GEMINI_KEY, _dg_project_id
+    global OPENAI_KEY, DEEPGRAM_KEY, GEMINI_KEY, ANTHROPIC_KEY, _dg_project_id
     if 'OPENAI_API_KEY' in updates:
         OPENAI_KEY = updates['OPENAI_API_KEY']
         os.environ['OPENAI_API_KEY'] = OPENAI_KEY
@@ -511,6 +523,9 @@ async def update_api_keys(request: Request, _: str = Depends(require_admin)):
     if 'GEMINI_API_KEY' in updates:
         GEMINI_KEY = updates['GEMINI_API_KEY']
         os.environ['GEMINI_API_KEY'] = GEMINI_KEY
+    if 'ANTHROPIC_API_KEY' in updates:
+        ANTHROPIC_KEY = updates['ANTHROPIC_API_KEY']
+        os.environ['ANTHROPIC_API_KEY'] = ANTHROPIC_KEY
 
     logger.info(f'API keys updated: {list(updates.keys())}')
     return {'ok': True, 'updated': list(updates.keys())}
@@ -519,12 +534,13 @@ async def update_api_keys(request: Request, _: str = Depends(require_admin)):
 @app.get('/api/settings')
 async def get_settings(_: str = Depends(require_admin)):
     """APIキー（マスク済み）・上限・現在の使用量を返す"""
-    services = ['whisper', 'deepgram', 'gemini-flash', 'gemini-pro']
+    services = ['whisper', 'deepgram', 'gemini-flash', 'gemini-pro', 'claude-haiku']
     keys = {
-        'whisper':      {'configured': bool(OPENAI_KEY),   'masked': _mask_key(OPENAI_KEY)},
-        'deepgram':     {'configured': bool(DEEPGRAM_KEY), 'masked': _mask_key(DEEPGRAM_KEY)},
-        'gemini-flash': {'configured': bool(GEMINI_KEY),   'masked': _mask_key(GEMINI_KEY)},
-        'gemini-pro':   {'configured': bool(GEMINI_KEY),   'masked': _mask_key(GEMINI_KEY)},
+        'whisper':      {'configured': bool(OPENAI_KEY),    'masked': _mask_key(OPENAI_KEY)},
+        'deepgram':     {'configured': bool(DEEPGRAM_KEY),  'masked': _mask_key(DEEPGRAM_KEY)},
+        'gemini-flash': {'configured': bool(GEMINI_KEY),    'masked': _mask_key(GEMINI_KEY)},
+        'gemini-pro':   {'configured': bool(GEMINI_KEY),    'masked': _mask_key(GEMINI_KEY)},
+        'claude-haiku': {'configured': bool(ANTHROPIC_KEY), 'masked': _mask_key(ANTHROPIC_KEY)},
     }
     usage = {}
     for svc in services:
@@ -894,9 +910,15 @@ def _build_speaker_map(project_id: str, utterances: list, conn) -> dict:
 
 
 # ── LLM 使用可能モデル ──────────────────────────────
+# ALLOWED_MODELS は merge_project 専用（Gemini限定・JSONLプロンプトがGemini向けに最適化）
 ALLOWED_MODELS = {
     'gemini-2.5-flash':  'Gemini 2.5 Flash（推奨）',
     'gemini-2.5-pro':    'Gemini 2.5 Pro（高品質）',
+}
+# LLM_MODELS は summarize / qa 用（Gemini + Claude）
+LLM_MODELS = {
+    **ALLOWED_MODELS,
+    'claude-haiku-4-5-20251001': 'Claude Haiku 4.5（要約・Q&A向け）',
 }
 
 
@@ -1630,6 +1652,61 @@ async def update_merge_settings_endpoint(request: Request, _: str = Depends(requ
 
 
 # ── 共通：Gemini呼び出しヘルパー ──────────────────
+async def _call_claude(system_prompt: str, user_prompt: str,
+                       model: str = 'claude-haiku-4-5-20251001',
+                       max_tokens: int = 4096, project_id: str = None) -> str:
+    """Anthropic Messages API 呼び出し。Gemini 互換のテキスト応答を返す。"""
+    if not ANTHROPIC_KEY:
+        raise HTTPException(503, 'Anthropic API key is not configured')
+    svc = _service_key(model)
+    _check_limit(svc, expected_units=1, expected_unit_type='requests')
+
+    payload = {
+        'model': model,
+        'system': system_prompt,
+        'messages': [{'role': 'user', 'content': user_prompt}],
+        'max_tokens': max_tokens,
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            f'{ANTHROPIC_BASE}/messages',
+            headers={
+                'x-api-key': ANTHROPIC_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            },
+            json=payload,
+        )
+        if r.status_code != 200:
+            logger.error(f'Anthropic error: {r.text[:500]}')
+            raise HTTPException(502, f'Anthropic API failed: {r.text}')
+        data = r.json()
+
+    # 使用量記録
+    usage = data.get('usage') or {}
+    pt = int(usage.get('input_tokens')  or 0)
+    ct = int(usage.get('output_tokens') or 0)
+    total = pt + ct
+    if total > 0:
+        lim = USAGE_LIMITS.get(svc, {})
+        cost = (pt / 1_000_000) * lim.get('rate_usd_per_1m_in', 0) \
+             + (ct / 1_000_000) * lim.get('rate_usd_per_1m_out', 0)
+        _record_usage(svc, total, 'tokens', project_id, '/llm', cost)
+
+    parts = data.get('content') or []
+    return ''.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
+
+
+async def _call_llm(system_prompt: str, user_prompt: str, model: str,
+                    max_tokens: int = 4096, project_id: str = None) -> str:
+    """モデル名で Gemini / Claude を振り分ける汎用 LLM 呼び出し。"""
+    if model not in LLM_MODELS:
+        raise HTTPException(400, f'model must be one of: {list(LLM_MODELS.keys())}')
+    if model.startswith('claude'):
+        return await _call_claude(system_prompt, user_prompt, model, max_tokens, project_id)
+    return await _call_gemini(system_prompt, user_prompt, model, max_tokens, project_id)
+
+
 async def _call_gemini(system_prompt: str, user_prompt: str, model: str = 'gemini-2.5-flash',
                        max_tokens: int = 4096, project_id: str = None) -> str:
     if model not in ALLOWED_MODELS:
@@ -1713,7 +1790,7 @@ async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
 }}"""
 
     logger.info(f'summarize start project={project_id} model={model}')
-    raw = await _call_gemini(system_prompt, user_prompt, model, max_tokens=2048)
+    raw = await _call_llm(system_prompt, user_prompt, model, max_tokens=2048, project_id=project_id)
 
     # JSON抽出（オブジェクト形式）
     fence_match = re.search(r'```(?:json)?\s*(.*?)(?:```|\Z)', raw, re.DOTALL)
@@ -1956,7 +2033,7 @@ async def ask_project(project_id: str, request: Request,
 - 長くても400字以内"""
 
     logger.info(f'ask start project={project_id} q_len={len(question)}')
-    answer = await _call_gemini(system_prompt, user_prompt, model, max_tokens=2048)
+    answer = await _call_llm(system_prompt, user_prompt, model, max_tokens=2048, project_id=project_id)
     logger.info(f'ask OK answer_len={len(answer)}')
 
     conn.execute(
