@@ -67,7 +67,7 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 - `docs/system-overview.html` — システム概要のHTML版（社外説明用）
 - `docs/superpowers/plans/` — 中長期実装プランの置き場（`YYYY-MM-DD-トピック.md` 形式）
 - `docs/superpowers/specs/` — 設計仕様書の置き場（`YYYY-MM-DD-トピック.md` 形式）
-- `_main_remote.py` / `_admin_remote.html` — **ローカル正典（編集可・scpデプロイ正規ルート）**。これらを編集 → VPS の `/opt/jizo-api/main.py` および `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` へ scp → 必要に応じ `systemctl restart jizo-api`
+- `_main_remote.py` / `_admin_remote.html` / `_db_remote.py` — **ローカル正典（編集可・scpデプロイ正規ルート）**。これらを編集 → VPS の `/opt/jizo-api/main.py` / `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` / `/opt/jizo-api/db.py` へ scp → 必要に応じ `systemctl restart jizo-api`
 
 ### VPS（`root@162.43.14.31`）
 - `/var/www/jizo-dev.com/ai-voice-memo/index.html` — モバイルPWA（↑のコピー）
@@ -186,16 +186,69 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - Run2: `language=None` + `prompt`（参加者名＋カタカナ固有名詞をヒント）
 - 同期API＝即`completed`で保存。`aai_id` プレフィクスは `whisper:` で識別
 
-### LLM統合（重み付きアーキテクチャ）
-旧 `summary_level` / `webspeech_fidelity` は撤廃。**重み3軸**で制御：
-- パラメータ：`w_ws` / `w_run1` / `w_run2`（合計10になるよう正規化）
-- **骨組み選定**：重み最大ソースが行数を決める（同点時 run2>run1>ws）
-- **クラスタ構築**：骨組みの各セグメント=1行、他ソースは ±2秒以内の最近傍を候補に
-- **話者決定**：優先度チェーン（押下±2秒 → 直前継承 → WS ref_segments → 未設定）
-- **LLMタスク**：行追加/削除/マージ禁止。各行で「重みに従って候補から選ぶ・合成」
-- 出力形式：`[{ts, speaker, text, note}]` のJSON
-- 不確実箇所は `【要確認:理由】` インラインタグ＋`note` フィールド
-- 話者「未設定」の行は `text` 末尾に `【要確認:話者】` を付記
+### LLM統合（ゼロ欠落・時系列整流アーキテクチャ：5フェーズ新設計）
+2026-06-05 改修。旧「重み最大ソース骨組み + LLMが全行を整流」設計の3欠陥（出力トークン truncation・LLM 指示不遵守・検証不在）を、決定論的行構成 + LLM テキスト整流 + チャンク分割 + 強制整合に再設計。詳細は `docs/superpowers/specs/2026-06-05-llm-merge-redesign-design.md`。
+
+**設計の3保証**
+- **ゼロ欠落**: 主軸全行 + オーファン挿入された他ソース独自発話を必ず含む
+- **時系列順**: 主軸1本で時系列が混線しない、LLM は行自体の順番を変えられない
+- **LLM 障害でも結果が返る**: チャンクごとの LLM 失敗時はそのチャンクを主軸生テキストで埋める
+
+**Phase 1: 主軸選定（決定論的）**
+- 完了済ソース（WS / Run1 / Run2）から最大量1本を選定
+- デフォルト選定スコア: `rows × log(total_chars + 1)`
+- 設定可能アルゴリズム: `rows_x_log_chars` / `rows_only` / `chars_only` / `fixed`
+- 実装: `_select_backbone(ws_items, run1_items, run2_items, algo, fixed)`
+
+**Phase 2: 行構築（主軸 + オーファン）**
+- 主軸の各行に他2ソースの最近傍候補を ±`cluster_window_ms`（デフォルト2000ms）窓で添付
+- 主軸どの行とも窓外、かつ広域 ±window×3 で類似度 < `orphan_sim_threshold`（デフォルト0.4）の他ソース発話はオーファンとして時系列挿入
+- 同一ソース内、500ms 以内の隣接オーファンを連結
+- 行数 (M + K) はここで確定、以降変動禁止
+- 実装: `_build_rows_with_orphans(...)`
+
+**Phase 3: 話者解決（既存ロジック流用）**
+- 優先度チェーン: 押下±2秒 → 直前押下継承 → WS speaker_idx ±4秒 → 「未設定」
+- 「未設定」行は最終テキスト末尾に `【要確認:話者】` 付記
+- 実装: `_resolve_speaker_for_row(ms, sp_events_sorted, ws_items, name_map)`
+
+**Phase 4: チャンク分割 LLM 整流（並列）**
+- 全行を `chunk_size`（デフォルト25）行ずつに分割、`asyncio.gather + Semaphore(parallel)` で最大3並列
+- 各チャンクに前後2行を「文脈（編集対象外）」として付与
+- LLM の仕事は厳格に3つのみ:
+  1. 主軸が拾い損ねた単語の補完
+  2. 主軸内で明らかに順序が崩れた語句の修正
+  3. 句読点・スペースの整形
+- 禁止: 行追加・削除・統合・分割・並べ替え、候補にない語句の新規生成、主軸意味の書換え
+- 出力形式: JSONL（1行=1JSON、truncation耐性が高い）
+- 重みスライダー（w_ws:w_run1:w_run2）は「同等候補から1つ選ぶ際の補完優先度ヒント」として LLM に渡す。**運用デフォルト 1:7:2**（Run1 主軸との整合）
+- 実装: `_chunk_rows / _call_gemini_chunk / _build_chunk_prompt / _parse_jsonl`
+
+**Phase 5: 強制整合（決定論的）**
+- チャンクごとに: LLM 失敗 or 行数不一致 → そのチャンクは主軸生テキスト直採用
+- 各行で候補に無い 4文字以上連続部分文字列を検出 → 幻覚と判定し主軸生テキストで上書き、`note='要確認:幻覚検出'`
+- 出力フィールド: `result_json = [{ts, speaker, text, note, sources?}]`（形状不変、Excel/Q&A/要約は無改修で動作）
+- 実装: `_detect_hallucination(text, candidates)` + `merge_project` 末尾
+
+**設定パラメータ（`merge_settings` テーブル・設定画面から変更可）**
+| キー | デフォルト | 範囲 |
+|---|---|---|
+| `chunk_size` | 25 | 10–50 |
+| `cluster_window_ms` | 2000 | 500–5000 |
+| `orphan_sim_threshold` | 0.4 | 0.0–1.0 |
+| `backbone_algo` | `fixed`（運用デフォルト） | 4種：`fixed` / `rows_x_log_chars` / `rows_only` / `chars_only` |
+| `backbone_fixed` | `run1`（Whisper 主軸固定） | `''`/`ws`/`run1`/`run2` |
+| `default_model` | `gemini-2.5-flash` | ALLOWED_MODELS |
+| `parallel` | 3 | 1–5 |
+| `max_tokens_per_chunk` | 8192 | 4096–16384 |
+| `retry_per_chunk` | 1 | 0–3 |
+
+**設定 API**
+- `GET /api/settings/merge`（Basic 認証）— 現在の設定取得
+- `PUT /api/settings/merge`（Basic 認証）— 部分更新、範囲外は自動クランプ
+
+**マージ Response の追加情報**
+`POST /api/projects/{id}/merge` は `{ok, segments, notes, backbone, fallback_chunks, hallucinations}` を返す。`fallback_chunks > 0` は LLM が一部チャンクで指示違反したことを示すサーバ側計測値（決定論で補償済み）。
 
 ### 差分比較の正規化
 管理画面の4カラム比較で「内容の差異」だけを検出するため、比較時は：
@@ -247,8 +300,11 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - ✅ モバイルPWA（録音・Web Speech・話者ボタン・MTG名・残り時間・IndexedDB）
 - ✅ VPS構築（Nginx + HTTPS + FastAPI + SQLite + systemd）
 - ✅ Whisper / Deepgram 連携（Run1/Run2・モデル選択・force再実行）
-- ✅ Gemini LLM統合（**重み付き 3軸スライダー**・差分検出・要確認タグ）
+- ✅ Gemini LLM統合（旧重み付きアーキテクチャ、2026-06-05に新設計で置換）
+- ✅ **LLM統合・ゼロ欠落時系列整流アーキテクチャ（5フェーズ新設計）** — 2026-06-05 完成。`docs/superpowers/specs/2026-06-05-llm-merge-redesign-design.md`
 - ✅ PC管理画面（4カラム比較・タイムライン軸マージ2秒窓・歯車設定・MTG削除/改名・音声ダウンロード）
+- ✅ **LLM最終版トランスクリプトの Excel エクスポート（管理画面ビューと同一の4カラム + Summary/Tasks/Issues シート）** — 2026-06-05
+- ✅ **LLM統合詳細設定の管理画面 UI 化**（チャンクサイズ・並列・主軸選定アルゴリズム等9項目） — 2026-06-05
 - ✅ 録音20分自動pause・STT無反応バナー
 - ✅ ログシステム（12hローテーション・`/api/logs`で閲覧）
 

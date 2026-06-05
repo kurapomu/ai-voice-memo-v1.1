@@ -209,7 +209,7 @@
 
   <header class="title">
     <h1>AIボイスメモ — システム概要</h1>
-    <p>対面録音特化のAIボイスメモPWA / 二段階方式 + 重み付きLLM統合</p>
+    <p>対面録音特化のAIボイスメモPWA / 二段階方式 + ゼロ欠落・時系列整流LLM統合</p>
     <div class="meta">
       <span class="tag">Version: jizo-dev.com</span>
       <span class="tag">Stack: PWA + FastAPI + SQLite</span>
@@ -224,7 +224,7 @@
       <li><a href="#system">システム全体構成図</a></li>
       <li><a href="#flow">データフロー・シーケンス</a></li>
       <li><a href="#stack">技術スタック一覧</a></li>
-      <li><a href="#weighted">重み付き統合アルゴリズム</a></li>
+      <li><a href="#weighted">ゼロ欠落・時系列整流アルゴリズム</a></li>
       <li><a href="#constraints">主要制約</a></li>
     </ol>
   </nav>
@@ -340,10 +340,10 @@ sequenceDiagram
     S-->>V: 第二候補
   end
 
-  U->>A: 重み調整 (WS:Run1:Run2 = 合計10)
+  U->>A: 重み(補完優先度) + 詳細設定
   A->>V: POST /merge?w_ws=2&w_run1=4&w_run2=4
-  V->>V: 骨組み選定 + クラスタ構築 + 話者決定
-  V->>L: 構造化テーブル + 重み比
+  V->>V: Phase1 主軸選定 (自動)<br/>Phase2 行構築+オーファン<br/>Phase3 話者解決
+  V->>L: チャンク分割×並列 (前後文脈付)
   L-->>V: 行ごとのテキスト合成結果
   V->>V: merged_transcripts に保存
   V-->>A: 4カラム比較表示
@@ -415,12 +415,12 @@ sequenceDiagram
     </div>
   </section>
 
-  <!-- 5. 重み付き統合 -->
+  <!-- 5. LLM統合（ゼロ欠落・時系列整流） -->
   <section id="weighted">
-    <h2>5. 重み付き統合アルゴリズム（独自設計）</h2>
+    <h2>5. LLM統合：ゼロ欠落・時系列整流アーキテクチャ（独自設計・2026-06-05改修）</h2>
     <div class="lead">
-      <strong>従来：</strong>LLMに3ソースを丸投げ → 勝手にマージ・省略・偏りが発生。<br>
-      <strong>新設計：</strong>アルゴリズム側で「行構造」「話者」を確定 → LLMはテキスト選択のみに集中。
+      <strong>旧設計の破綻：</strong>「重み最大ソースを骨組み → LLMが全行を一度に整形」設計は、出力トークン truncation、Gemini の指示不遵守、検証不在の3欠陥で「後半が欠損だらけ」になっていた。<br>
+      <strong>新設計：</strong>行構成は完全に決定論的に確定し、LLM の仕事は行内テキストの整流のみに限定。チャンク分割 + 強制整合フォールバックで <em>ゼロ欠落・時系列順・LLM障害でも結果が返る</em> を構造で保証。
     </div>
 
     <div class="legend">
@@ -429,39 +429,50 @@ sequenceDiagram
       <span class="l-r2">Run2 = 2回目のSTT解析</span>
     </div>
 
-    <div class="step"><span class="num">1</span><strong>重みから骨組みソースを選定</strong>
-      <p>例：WS=2, Run1=4, Run2=4 → 同点時は <code>run2 &gt; run1 &gt; ws</code> → 骨組み = Run2</p></div>
+    <div class="step"><span class="num">1</span><strong>主軸選定（決定論）</strong>
+      <p>運用デフォルトは <code>fixed</code> で Run1（Whisper）を主軸固定（日本語精度と分割安定性のため）。自動選定にも切替可能：<code>rows_x_log_chars</code>（行数 × log文字数）/ <code>rows_only</code> / <code>chars_only</code>。</p></div>
 
-    <div class="step"><span class="num">2</span><strong>骨組みの全セグメントを行に展開</strong>
-      <p>Run2 が 30 セグメントなら、出力も 30 行で固定。LLMが行数を変えることを構造的に禁止。</p></div>
+    <div class="step"><span class="num">2</span><strong>行構築（主軸 + オーファン挿入）</strong>
+      <p>主軸の各行に他2ソースの最近傍候補を ±2秒窓で添付。主軸どの行とも窓外かつ広域類似度 &lt; 0.4 の他ソース発話は「オーファン」として時系列で挿入（取りこぼし救済）。500ms以内の隣接オーファンは連結。<strong>ここで行数が確定し、以降一切変動しない</strong>。</p></div>
 
-    <div class="step"><span class="num">3</span><strong>各行に他ソースを「候補」として添える</strong>
-      <p>骨組み行のタイムスタンプから <code>±2秒以内</code> の最近傍を採用。3ソースの候補テーブルが完成。</p></div>
+    <div class="step"><span class="num">3</span><strong>話者解決（決定論・LLMに任せない）</strong>
+      <p>優先度チェーン：押下イベント±2秒 → 直前押下継承 → WS speaker_idx ±4秒 → 「未設定」（<code>【要確認:話者】</code> 付記）。</p></div>
 
-    <div class="step"><span class="num">4</span><strong>話者をアルゴリズムで決定（LLMに任せない）</strong>
-      <p>優先度チェーン：押下イベント±2秒 → 直前継承 → WS ref_segments → 未設定（<code>【要確認:話者】</code> 付記）</p></div>
+    <div class="step"><span class="num">4</span><strong>チャンク分割LLM整流（並列）</strong>
+      <p>全行を <code>chunk_size=25</code> 行ずつに分割、最大3並列で LLM 呼出。各チャンクに前後2行を「文脈」として付与。LLMの仕事は厳格に3つだけ：①欠損単語の補完 ②語順修正 ③整形。<strong>行追加・削除・マージ・並べ替え・候補に無い語句生成は絶対禁止</strong>。出力は JSONL（1行=1JSON、truncation 耐性が高い）。</p></div>
 
-    <div class="step"><span class="num">5</span><strong>LLMに構造化テーブルと重み比を渡す</strong>
-      <p>指示は「行を追加・削除・マージするな。重み比に従って3候補から選ぶ／合成せよ」。LLMの仕事はテキスト合成のみ → 暴走しない。</p></div>
+    <div class="step"><span class="num">5</span><strong>強制整合（決定論）</strong>
+      <p>チャンクごとに：LLM 失敗 or 行数不一致 → そのチャンク全行を主軸生テキストで埋める。各行で「候補に無い4字以上連続部分文字列」を検出 → 幻覚と判定し主軸生テキストで上書き。<strong>LLM障害でも結果は必ず返る</strong>。</p></div>
 
-    <h3>候補テーブルの例（ステップ3の出力）</h3>
-    <pre class="box">行01 [00:02] WS="こんにちは"   Run1="こんにちは"      Run2="こんにちは"
-行02 [00:23] WS="ＤＳＲ"        Run1="DSL"            Run2="DSR について"
-行03 [00:45] WS=(なし)          Run1="今日のアジェ"    Run2="今日のアジェンダは"</pre>
+    <h3>設定可能パラメータ（管理画面 ⚙ から変更可）</h3>
+    <table>
+      <thead><tr><th>パラメータ</th><th>デフォルト</th><th>範囲</th><th>意味</th></tr></thead>
+      <tbody>
+        <tr><td><code>chunk_size</code></td><td>25</td><td>10–50</td><td>LLM 1リクエストあたりの行数</td></tr>
+        <tr><td><code>cluster_window_ms</code></td><td>2000</td><td>500–5000</td><td>同一発話判定の時間窓</td></tr>
+        <tr><td><code>orphan_sim_threshold</code></td><td>0.4</td><td>0.0–1.0</td><td>オーファン除外のテキスト類似度閾値</td></tr>
+        <tr><td><code>backbone_algo</code></td><td><strong>fixed</strong>（運用デフォルト）</td><td>fixed / rows_x_log_chars / rows_only / chars_only</td><td>主軸選定アルゴリズム</td></tr>
+        <tr><td><code>backbone_fixed</code></td><td><strong>run1</strong>（Whisper 固定）</td><td>'' / ws / run1 / run2</td><td><code>fixed</code> 時の主軸</td></tr>
+        <tr><td><code>default_model</code></td><td>gemini-2.5-flash</td><td>Flash / Pro</td><td>未指定時のデフォルトモデル</td></tr>
+        <tr><td><code>parallel</code></td><td>3</td><td>1–5</td><td>LLM 並列呼出数</td></tr>
+        <tr><td><code>max_tokens_per_chunk</code></td><td>8192</td><td>4096–16384</td><td>各 LLM 呼出の max_tokens</td></tr>
+        <tr><td><code>retry_per_chunk</code></td><td>1</td><td>0–3</td><td>チャンク失敗時のリトライ回数</td></tr>
+      </tbody>
+    </table>
 
-    <h3>重み設定UI（管理画面イメージ）</h3>
-    <pre class="box">┌────────────────────────────────────────┐
-│ LLM統合の重み付け（合計10）             │
-│                                          │
-│   WS  2  :  Run1  4  :  Run2  4         │
-│                                          │
-│ Web Speech ●──────                  2   │
-│ Run1       ────●──                  4   │
-│ Run2       ────●──                  4   │
-│                                          │
-│ [Run2重視 1:2:7] [均等 2:4:4] [WS重視 7:2:1] │
-└────────────────────────────────────────┘</pre>
-    <p style="font-size:14px">スライダー1本を動かすと他2本が比例配分で自動調整（合計10維持）。重み 0 のソースは LLM 入力から完全除外。</p>
+    <h3>重みスライダーの新しい意味</h3>
+    <p style="font-size:14px">旧設計で「主軸選定の重み」だった <code>w_ws:w_run1:w_run2</code> は、新設計では <strong>LLM への補完優先度ヒント</strong> として渡される（同等候補から1つ選ぶ際の参考）。主軸選定は別の自動アルゴリズムが担当する。スライダー UI は localStorage に保存され、MTGをまたいで継続される。<strong>運用デフォルトは 1:7:2</strong>（主軸 Run1 固定との整合）。</p>
+
+    <h3>マージ結果のレスポンス例</h3>
+    <pre class="box">{
+  "ok": true,
+  "segments": 141,           // 確定行数（ゼロ欠落で保持）
+  "notes": 0,                // 要確認件数
+  "backbone": "run1",        // 自動選定された主軸
+  "fallback_chunks": 1,      // LLM が壊れて決定論で補償したチャンク数
+  "hallucinations": 0        // 幻覚検出して上書きした行数
+}</pre>
+    <p style="font-size:14px"><code>fallback_chunks &gt; 0</code> でも結果は完成している（決定論フォールバックで補償済み）。<code>hallucinations &gt; 0</code> の行は <code>note=「要確認:幻覚検出」</code> が付き、管理画面の要確認リストに集約される。</p>
   </section>
 
   <!-- 6. 制約 -->

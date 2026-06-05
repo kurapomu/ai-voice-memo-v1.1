@@ -893,27 +893,422 @@ def _build_speaker_map(project_id: str, utterances: list, conn) -> dict:
     return result
 
 
-# ── LLM突合で最終版トランスクリプト生成 ──────────────
+# ── LLM 使用可能モデル ──────────────────────────────
 ALLOWED_MODELS = {
     'gemini-2.5-flash':  'Gemini 2.5 Flash（推奨）',
     'gemini-2.5-pro':    'Gemini 2.5 Pro（高品質）',
 }
 
+
+# ── LLM統合：設定範囲と取得 ──────────────────────────
+MERGE_SETTINGS_RANGES = {
+    'chunk_size':           (int,   10, 50),
+    'cluster_window_ms':    (int,   500, 5000),
+    'orphan_sim_threshold': (float, 0.0, 1.0),
+    'parallel':             (int,   1, 5),
+    'max_tokens_per_chunk': (int,   4096, 16384),
+    'retry_per_chunk':      (int,   0, 3),
+}
+MERGE_SETTINGS_DEFAULTS = {
+    'chunk_size':           25,
+    'cluster_window_ms':    2000,
+    'orphan_sim_threshold': 0.4,
+    'backbone_algo':        'fixed',
+    'backbone_fixed':       'run1',
+    'default_model':        'gemini-2.5-flash',
+    'parallel':             3,
+    'max_tokens_per_chunk': 8192,
+    'retry_per_chunk':      1,
+}
+
+
+def _get_merge_settings() -> dict:
+    """DBから設定読出。未存在キーはデフォルト。"""
+    try:
+        conn = get_conn()
+        rows = conn.execute('SELECT key,value FROM merge_settings').fetchall()
+        conn.close()
+        raw = {r['key']: r['value'] for r in rows}
+    except Exception:
+        raw = {}
+    out = dict(MERGE_SETTINGS_DEFAULTS)
+    for k, v in raw.items():
+        if k not in MERGE_SETTINGS_DEFAULTS:
+            continue
+        if k in MERGE_SETTINGS_RANGES:
+            t, lo, hi = MERGE_SETTINGS_RANGES[k]
+            try:
+                val = t(v)
+                out[k] = max(lo, min(hi, val))
+            except Exception:
+                pass
+        else:
+            out[k] = v
+    return out
+
+
+def _clamp_merge_settings(d: dict) -> dict:
+    """入力値を範囲クランプ。enum・文字列は許可リスト判定。"""
+    out = {}
+    for k, default in MERGE_SETTINGS_DEFAULTS.items():
+        if k not in d:
+            out[k] = default
+            continue
+        v = d[k]
+        if k in MERGE_SETTINGS_RANGES:
+            t, lo, hi = MERGE_SETTINGS_RANGES[k]
+            try:
+                out[k] = max(lo, min(hi, t(v)))
+            except Exception:
+                out[k] = default
+        elif k == 'backbone_algo':
+            out[k] = v if v in ('rows_x_log_chars', 'rows_only', 'chars_only', 'fixed') else default
+        elif k == 'backbone_fixed':
+            out[k] = v if v in ('', 'ws', 'run1', 'run2') else ''
+        elif k == 'default_model':
+            out[k] = v if v in ALLOWED_MODELS else default
+        else:
+            out[k] = v
+    return out
+
+
+def _normalize_for_compare(text: str) -> str:
+    """類似度比較・幻覚検出用の正規化（句読点・スペース除去・要確認タグ除去）"""
+    if not text:
+        return ''
+    t = re.sub(r'([^\x00-\x7F])\s+([^\x00-\x7F])', r'\1\2', text)
+    t = re.sub(r'([^\x00-\x7F])\s+([^\x00-\x7F])', r'\1\2', t)
+    t = re.sub(r'【要確認[^】]*】', '', t)
+    return re.sub(r'[。、！？!?,\.・\s]', '', t)
+
+
+def _text_sim(a: str, b: str) -> float:
+    """0..1。短文の包含優先 + Dice 係数（bigram）"""
+    na, nb = _normalize_for_compare(a), _normalize_for_compare(b)
+    if not na or not nb:
+        return 0.0
+    short, long_ = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(short) >= 2 and short in long_:
+        return len(short) / len(long_)
+    if len(na) < 2 or len(nb) < 2:
+        return 1.0 if na == nb else 0.0
+    def grams(s):
+        return {s[i:i+2] for i in range(len(s) - 1)}
+    A, B = grams(na), grams(nb)
+    if len(A) + len(B) == 0:
+        return 0.0
+    return 2 * len(A & B) / (len(A) + len(B))
+
+
+def _select_backbone(ws_items, run1_items, run2_items, algo: str, fixed: str):
+    """主軸選定。returns (key, items) or raises HTTPException."""
+    import math
+    sources = {
+        'ws':   ws_items,
+        'run1': run1_items,
+        'run2': run2_items,
+    }
+    if algo == 'fixed' and fixed in sources and sources[fixed]:
+        return fixed, sources[fixed]
+    def score(items):
+        n = len(items)
+        if n == 0:
+            return -1.0
+        total_chars = sum(len(x.get('text', '')) for x in items)
+        if algo == 'rows_only':
+            return float(n)
+        if algo == 'chars_only':
+            return float(total_chars)
+        return n * math.log(total_chars + 1)
+    candidates = [(k, score(v)) for k, v in sources.items() if v]
+    if not candidates:
+        raise HTTPException(400, 'マージ可能なソースがありません')
+    candidates.sort(key=lambda x: -x[1])
+    best_key = candidates[0][0]
+    return best_key, sources[best_key]
+
+
+def _build_rows_with_orphans(backbone_key: str, backbone_items: list,
+                              ws_items: list, run1_items: list, run2_items: list,
+                              window_ms: int, sim_threshold: float):
+    """主軸の各行 + 主軸窓外のオーファンを時系列で構築。"""
+    others = {
+        'ws':   ws_items   if backbone_key != 'ws'   else [],
+        'run1': run1_items if backbone_key != 'run1' else [],
+        'run2': run2_items if backbone_key != 'run2' else [],
+    }
+
+    def nearest(items, ms):
+        if not items:
+            return None
+        best = min(items, key=lambda x: abs(x['ms'] - ms))
+        return best if abs(best['ms'] - ms) <= window_ms else None
+
+    rows = []
+    for item in backbone_items:
+        ms = item['ms']
+        cand_ws = item if backbone_key == 'ws' else nearest(ws_items, ms)
+        cand_r1 = item if backbone_key == 'run1' else nearest(run1_items, ms)
+        cand_r2 = item if backbone_key == 'run2' else nearest(run2_items, ms)
+        rows.append({
+            'ms': ms,
+            'ts': item.get('ts', ''),
+            'backbone_text': (item.get('text') or '').strip(),
+            'backbone_src': backbone_key,
+            'cand_ws':   (cand_ws['text']  if cand_ws else ''),
+            'cand_run1': (cand_r1['text']  if cand_r1 else ''),
+            'cand_run2': (cand_r2['text']  if cand_r2 else ''),
+            'is_orphan': False,
+        })
+
+    # オーファン検出
+    orphan_items = []
+    for src_key, items in others.items():
+        for it in items:
+            ms = it['ms']
+            nearest_backbone = min(rows, key=lambda r: abs(r['ms'] - ms)) if rows else None
+            if nearest_backbone and abs(nearest_backbone['ms'] - ms) <= window_ms:
+                continue
+            # 広域でテキスト類似な主軸行があれば skip
+            sim_high = False
+            for r in rows:
+                if abs(r['ms'] - ms) <= window_ms * 3:
+                    if _text_sim(it.get('text', ''), r['backbone_text']) >= sim_threshold:
+                        sim_high = True
+                        break
+            if sim_high:
+                continue
+            orphan_items.append((ms, src_key, it))
+
+    # 同一ソース連続オーファン連結（500ms以内）
+    orphan_items.sort(key=lambda x: x[0])
+    merged_orphans = []
+    last = None
+    for ms, src, it in orphan_items:
+        text = (it.get('text') or '').strip()
+        if last and last['src'] == src and ms - last['ms_last'] <= 500:
+            last['text'] = (last['text'] + ' ' + text).strip()
+            last['ms_last'] = ms
+        else:
+            last = {'ms': ms, 'ms_last': ms, 'src': src, 'text': text}
+            merged_orphans.append(last)
+
+    def _ms_to_ts_local(ms):
+        sec = max(0, int(ms / 1000))
+        return f'{sec // 60:02d}:{sec % 60:02d}'
+
+    for o in merged_orphans:
+        rows.append({
+            'ms': o['ms'],
+            'ts': _ms_to_ts_local(o['ms']),
+            'backbone_text': o['text'],
+            'backbone_src': o['src'],
+            'cand_ws':   o['text'] if o['src'] == 'ws'   else '',
+            'cand_run1': o['text'] if o['src'] == 'run1' else '',
+            'cand_run2': o['text'] if o['src'] == 'run2' else '',
+            'is_orphan': True,
+        })
+
+    rows.sort(key=lambda r: r['ms'])
+    for i, r in enumerate(rows):
+        r['idx'] = i + 1
+    return rows
+
+
+def _resolve_speaker_for_row(ms, sp_events_sorted, ws_items, name_map):
+    near = [e for e in sp_events_sorted if abs(e['ms'] - ms) <= 2000]
+    if near:
+        best = min(near, key=lambda e: abs(e['ms'] - ms))
+        return (best['speaker_name'] or '未設定', False)
+    prior = [e for e in sp_events_sorted if e['ms'] <= ms]
+    if prior:
+        return (prior[-1]['speaker_name'] or '未設定', False)
+    if ws_items:
+        nearest_ws = min(ws_items, key=lambda x: abs(x['ms'] - ms))
+        if abs(nearest_ws['ms'] - ms) <= 4000 and nearest_ws['speaker_idx'] is not None:
+            return (name_map.get(nearest_ws['speaker_idx'], '未設定'), False)
+    return ('未設定', True)
+
+
+def _chunk_rows(rows: list, size: int, ctx: int = 2):
+    chunks = []
+    n = len(rows)
+    for s in range(0, n, size):
+        e = min(s + size, n)
+        chunks.append({
+            'idx_start': s,
+            'idx_end':   e,
+            'rows':      rows[s:e],
+            'ctx_prev':  rows[max(0, s - ctx):s],
+            'ctx_next':  rows[e:min(n, e + ctx)],
+        })
+    return chunks
+
+
+def _detect_hallucination(text: str, candidates: list) -> bool:
+    """text に「候補連結文字列に含まれない4文字以上の連続部分文字列」があれば幻覚。"""
+    norm = _normalize_for_compare(text)
+    joined = ''.join(_normalize_for_compare(c or '') for c in candidates)
+    if not norm or not joined:
+        return False
+    if len(norm) < 4:
+        return False
+    for i in range(0, len(norm) - 3):
+        if norm[i:i+4] not in joined:
+            return True
+    return False
+
+
+def _parse_jsonl(raw: str, expected_n: int):
+    """JSONL or JSON array をパース。expected_n と一致しなければ None。"""
+    raw = raw.strip()
+    fence_match = re.search(r'```(?:json)?\s*(.*?)(?:```|\Z)', raw, re.DOTALL)
+    if fence_match:
+        raw = fence_match.group(1).strip()
+    if raw.startswith('['):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list) and len(data) == expected_n:
+                return data
+        except Exception:
+            pass
+    result = []
+    for line in raw.split('\n'):
+        line = line.strip().rstrip(',')
+        if not line or line in ('[', ']'):
+            continue
+        try:
+            result.append(json.loads(line))
+        except Exception:
+            continue
+    if len(result) == expected_n:
+        return result
+    return None
+
+
+async def _call_gemini_chunk(system_prompt: str, user_prompt: str,
+                              model: str, max_tokens: int, retry: int = 1):
+    """単一チャンクのLLM呼出。失敗時は None。"""
+    last_err = None
+    for attempt in range(retry + 1):
+        try:
+            payload = {
+                'model': model,
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user',   'content': user_prompt},
+                ],
+                'max_tokens': max_tokens,
+            }
+            async with httpx.AsyncClient(timeout=90) as client:
+                r = await client.post(
+                    f'{GEMINI_BASE}/chat/completions',
+                    headers={
+                        'Authorization': f'Bearer {GEMINI_KEY}',
+                        'content-type': 'application/json',
+                    },
+                    json=payload,
+                )
+                if r.status_code != 200:
+                    last_err = f'status={r.status_code} body={r.text[:200]}'
+                    continue
+                return r.json()['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            last_err = str(e)
+    logger.warning(f'_call_gemini_chunk failed after {retry+1} attempts: {last_err}')
+    return None
+
+
+def _build_chunk_prompt(chunk: dict, plist: str, w_ws: int, w_run1: int, w_run2: int,
+                        run_engines: dict):
+    system_prompt = (
+        'あなたは日本語会議録音の文字起こしを整流する編集者です。\n'
+        '\n'
+        'あなたの仕事は、主軸ソースの行ごとのテキストに対して、'
+        '他ソース（補完候補）を文脈として参照しながら以下のみを行うことです：\n'
+        '1. 主軸が拾い損ねた単語の補完\n'
+        '2. 主軸内で明らかに順序が崩れた語句の修正\n'
+        '3. 句読点とスペースの整形\n'
+        '\n'
+        '絶対禁止事項：\n'
+        '- 行の追加・削除・統合・分割・並べ替え\n'
+        '- 候補テキストに存在しない語句の新規生成\n'
+        '- 主軸テキストの意味を変える書換え\n'
+        '\n'
+        '判断に迷う場合は主軸テキストをそのまま返してください。誠実さが速度より大切です。'
+    )
+
+    def _fmt_ctx(rs, prefix):
+        if not rs:
+            return '  （なし）'
+        return '\n'.join(
+            f'  [{prefix}{i+1}] [ts={r["ts"]}] [話者={r.get("speaker","")}] 主軸: {r["backbone_text"]}'
+            for i, r in enumerate(rs)
+        )
+
+    def _fmt_target(rs):
+        out = []
+        for i, r in enumerate(rs):
+            idx = i + 1
+            out.append(
+                f'行{idx:03d} [ts={r["ts"]}] [話者={r.get("speaker","")}]\n'
+                f'    主軸({r["backbone_src"]}): {r["backbone_text"]}\n'
+                f'    WS:   {r["cand_ws"]   or "（なし）"}\n'
+                f'    Run1: {r["cand_run1"] or "（なし）"}\n'
+                f'    Run2: {r["cand_run2"] or "（なし）"}'
+            )
+        return '\n'.join(out)
+
+    N = len(chunk['rows'])
+    user_prompt = (
+        f"## 参加者\n{plist}\n\n"
+        f"## 補完優先度（同等候補から1つ選ぶ際の参考）\n"
+        f"WebSpeech : Run1({run_engines.get(1,'ASR')}) : Run2({run_engines.get(2,'ASR')}) = "
+        f"{w_ws} : {w_run1} : {w_run2}\n\n"
+        f"## 文脈（参照のみ・出力に含めない）\n{_fmt_ctx(chunk['ctx_prev'], 'prev-')}\n\n"
+        f"## 編集対象（必ず {N} 行を {N} 行で返す）\n{_fmt_target(chunk['rows'])}\n\n"
+        f"## 文脈（参照のみ・出力に含めない）\n{_fmt_ctx(chunk['ctx_next'], 'next-')}\n\n"
+        f"## 出力形式（JSONL、1行=1JSON、改行区切り、フェンス不要）\n"
+        f'{{"idx":1,"text":"...","note":null}}\n'
+        f'{{"idx":2,"text":"...","note":"要確認の理由"}}\n'
+        f"...\n\n"
+        f"※ 必ず {N} 行返してください。idx は 1〜{N} の連番厳守。"
+    )
+    return system_prompt, user_prompt
+
+
+def _make_segment(row, text, note):
+    return {
+        'ts': row['ts'],
+        'speaker': row.get('speaker', '未設定'),
+        'text': text,
+        'note': note,
+        '_cand_ws':   row.get('cand_ws', ''),
+        '_cand_run1': row.get('cand_run1', ''),
+        '_cand_run2': row.get('cand_run2', ''),
+    }
+
+
+# ── LLM突合で最終版トランスクリプト生成（5フェーズ新設計） ──
 @app.post('/api/projects/{project_id}/merge')
 async def merge_project(project_id: str,
-                        model: str = 'gemini-2.5-flash',
-                        w_ws: int = 2,
-                        w_run1: int = 4,
-                        w_run2: int = 4,
-                        base: str = '',
+                        model: str = '',
+                        w_ws: int = 1,
+                        w_run1: int = 7,
+                        w_run2: int = 2,
+                        base: str = '',  # 後方互換用・未使用
                         _: str = Depends(require_admin)):
+    settings = _get_merge_settings()
+    if not model:
+        model = settings['default_model']
+    if model not in ALLOWED_MODELS:
+        raise HTTPException(400, f'model must be one of: {list(ALLOWED_MODELS.keys())}')
+
     conn = get_conn()
     proj = conn.execute('SELECT * FROM projects WHERE id=?', (project_id,)).fetchone()
     if not proj:
         conn.close()
         raise HTTPException(404, 'Project not found')
-
-    # source カラムは Task 2 のスキーマ拡張で追加される。未存在時は 'mobile' 扱い
     try:
         source = (proj['source'] or 'mobile') if 'source' in proj.keys() else 'mobile'
     except Exception:
@@ -936,7 +1331,6 @@ async def merge_project(project_id: str,
         "SELECT * FROM ai_transcripts WHERE project_id=? AND status='completed' ORDER BY run_number,id",
         (project_id,)
     ).fetchall()
-    # Zoom MTG の場合、recordings.zoom_participant_name で話者を確定する
     if source == 'zoom':
         recs_for_offset = conn.execute(
             'SELECT id,seq,duration,zoom_participant_name FROM recordings WHERE project_id=? ORDER BY seq',
@@ -948,8 +1342,7 @@ async def merge_project(project_id: str,
         ).fetchall()
     conn.close()
 
-    # Zoom 用：recording_id → 話者ラベル（既に確定済み）
-    zoom_speaker_by_rec_id: dict[int, str] = {}
+    zoom_speaker_by_rec_id = {}
     if source == 'zoom':
         for r in recs_for_offset:
             try:
@@ -957,7 +1350,6 @@ async def merge_project(project_id: str,
             except (KeyError, IndexError):
                 pass
 
-    # recording_id → 録音開始からの累積オフセット(ms)
     offset_by_rec_id = {}
     _cum = 0
     for r in recs_for_offset:
@@ -967,26 +1359,25 @@ async def merge_project(project_id: str,
         except Exception:
             pass
 
-    # ── 重み正規化（合計10）───────────────────────
+    # 重み正規化（合計10）— LLMヒントとして使用
     w_ws   = max(0, int(w_ws))
     w_run1 = max(0, int(w_run1))
     w_run2 = max(0, int(w_run2))
     wsum = w_ws + w_run1 + w_run2
     if wsum == 0:
-        w_ws, w_run1, w_run2, wsum = 2, 4, 4, 10
-    if wsum != 10:
+        w_ws, w_run1, w_run2 = 1, 7, 2
+    elif wsum != 10:
         w_ws   = round(w_ws   * 10 / wsum)
         w_run1 = round(w_run1 * 10 / wsum)
         w_run2 = 10 - w_ws - w_run1
 
     plist = ', '.join(f'{r["name"]}（{r["idx"]}）' for r in participants) or '（参加者登録なし）'
 
-    # ── 各ソースをタイムスタンプ付き発言リストに揃える ──
-    def _ms_to_ts(ms: int) -> str:
+    def _ms_to_ts(ms):
         sec = max(0, int(ms / 1000))
         return f'{sec // 60:02d}:{sec % 60:02d}'
 
-    def _ts_to_ms(ts: str) -> int:
+    def _ts_to_ms(ts):
         try:
             mm, ss = ts.split(':')
             return (int(mm) * 60 + int(ss)) * 1000
@@ -998,16 +1389,15 @@ async def merge_project(project_id: str,
          'speaker_idx': r['speaker_idx']}
         for r in ref_segs if (r['text'] or '').strip()
     ]
+
     run_items = {1: [], 2: []}
     run_engines = {1: 'ASR', 2: 'ASR'}
-    run_speaker_maps = {1: {}, 2: {}}
     for tx in txs:
         rn = tx['run_number']
         eng = (tx['engine'] or '').lower() if 'engine' in tx.keys() else ''
         if not eng and tx['aai_id']:
             eng = str(tx['aai_id']).split(':', 1)[0]
         run_engines[rn] = {'whisper': 'Whisper', 'deepgram': 'Deepgram'}.get(eng, eng or 'ASR')
-        run_speaker_maps[rn] = json.loads(tx['speaker_map_json']) if tx['speaker_map_json'] else {}
         utts = json.loads(tx['utterances_json']) if tx['utterances_json'] else []
         base_offset = offset_by_rec_id.get(tx['recording_id'], 0)
         for u in utts:
@@ -1016,7 +1406,6 @@ async def merge_project(project_id: str,
                 continue
             abs_ms = int(u.get('start') or 0) + base_offset
             spk = u.get('speaker', 'A')
-            # Zoom MTG では話者ラベルが recording_id で確定（音源分離済み）
             if source == 'zoom':
                 spk = zoom_speaker_by_rec_id.get(tx['recording_id'], spk) or spk
             run_items[rn].append({
@@ -1026,267 +1415,112 @@ async def merge_project(project_id: str,
                 'speaker': spk,
             })
 
-    # ── 骨組み（=出力の時間軸）：base 指定優先、無ければ重み最大 ──
-    base_key = (base or '').strip().lower()
-    if base_key in ('ws', 'run1', 'run2'):
-        _src_map = {'ws': ws_items, 'run1': run_items[1], 'run2': run_items[2]}
-        if not _src_map[base_key]:
-            raise HTTPException(400, f'基準ソース {base_key} にデータがありません。別のソースを選んでください。')
-        backbone_key = base_key
-    else:
-        src_pool = []
-        if w_ws   > 0 and ws_items:     src_pool.append(('ws',   w_ws,   len(ws_items),     0))
-        if w_run1 > 0 and run_items[1]: src_pool.append(('run1', w_run1, len(run_items[1]), 1))
-        if w_run2 > 0 and run_items[2]: src_pool.append(('run2', w_run2, len(run_items[2]), 2))
-        if not src_pool:
-            raise HTTPException(400, '統合可能なソースがありません。重みを見直してください。')
-        src_pool.sort(key=lambda x: (-x[1], -x[2], -x[3]))
-        backbone_key = src_pool[0][0]
-
-    backbone_items = (
-        ws_items if backbone_key == 'ws'
-        else run_items[1] if backbone_key == 'run1'
-        else run_items[2]
+    # ── Phase 1: 主軸選定 ──────────────────────────
+    backbone_key, backbone_items = _select_backbone(
+        ws_items, run_items[1], run_items[2],
+        settings['backbone_algo'], settings['backbone_fixed']
     )
 
-    # ── 話者決定（優先度チェーン）─────────────────
+    # ── Phase 2: 行構築（主軸 + オーファン）─────────
+    rows = _build_rows_with_orphans(
+        backbone_key, backbone_items,
+        ws_items, run_items[1], run_items[2],
+        window_ms=settings['cluster_window_ms'],
+        sim_threshold=settings['orphan_sim_threshold'],
+    )
+
+    # ── Phase 3: 話者解決 ──────────────────────────
     sp_events_sorted = sorted(speaker_events, key=lambda e: e['ms'])
-
-    def resolve_speaker(ms: int) -> tuple[str, bool]:
-        """returns (speaker_name, is_uncertain)"""
-        # 1) ±2秒以内の押下イベント
-        near = [e for e in sp_events_sorted if abs(e['ms'] - ms) <= 2000]
-        if near:
-            best = min(near, key=lambda e: abs(e['ms'] - ms))
-            return (best['speaker_name'] or '未設定', False)
-        # 2) 直前押下の継承
-        prior = [e for e in sp_events_sorted if e['ms'] <= ms]
-        if prior:
-            return (prior[-1]['speaker_name'] or '未設定', False)
-        # 3) WS ref_segments の speaker_idx を参照
-        if ws_items:
-            nearest_ws = min(ws_items, key=lambda x: abs(x['ms'] - ms))
-            if abs(nearest_ws['ms'] - ms) <= 4000 and nearest_ws['speaker_idx'] is not None:
-                return (name_map.get(nearest_ws['speaker_idx'], '未設定'), False)
-        # 4) どれも該当なし
-        return ('未設定', True)
-
-    # ── クラスタ構築（骨組みの各セグメント = 1行）─
-    def nearest_within(items, ms, win=2000):
-        if not items: return None
-        best = min(items, key=lambda x: abs(x['ms'] - ms))
-        return best if abs(best['ms'] - ms) <= win else None
-
-    rows = []
-    for i, base in enumerate(backbone_items):
-        ms = base['ms']
-        sp_name, sp_uncertain = resolve_speaker(ms)
-        cand_ws   = base if backbone_key == 'ws'   else nearest_within(ws_items,   ms)
-        cand_run1 = base if backbone_key == 'run1' else nearest_within(run_items[1], ms)
-        cand_run2 = base if backbone_key == 'run2' else nearest_within(run_items[2], ms)
-        rows.append({
-            'idx': i + 1,
-            'ts': _ms_to_ts(ms),
-            'speaker': sp_name,
-            'sp_uncertain': sp_uncertain,
-            'cand_ws':   (cand_ws['text']   if cand_ws   else ''),
-            'cand_run1': (cand_run1['text'] if cand_run1 else ''),
-            'cand_run2': (cand_run2['text'] if cand_run2 else ''),
-        })
-
-    # ── 入力テーブル（LLMに渡す）────────────────
-    src_label = {
-        'ws':   'WebSpeech',
-        'run1': f'Run1({run_engines[1]})',
-        'run2': f'Run2({run_engines[2]})',
-    }
-    table_lines = []
     for row in rows:
-        parts = [
-            f'WS={"" if w_ws==0 else (row["cand_ws"] or "（なし）")}',
-            f'Run1={"" if w_run1==0 else (row["cand_run1"] or "（なし）")}',
-            f'Run2={"" if w_run2==0 else (row["cand_run2"] or "（なし）")}',
-        ]
-        table_lines.append(
-            f'行{row["idx"]:03d} [{row["ts"]}] [話者={row["speaker"]}] '
-            + ' / '.join(parts)
+        sp_name, sp_uncertain = _resolve_speaker_for_row(
+            row['ms'], sp_events_sorted, ws_items, name_map
         )
-    table_block = '\n'.join(table_lines) or '（データなし）'
+        row['speaker'] = sp_name
+        row['sp_uncertain'] = sp_uncertain
 
-    backbone_label = src_label[backbone_key]
-
-    base_specified = base_key in ('ws', 'run1', 'run2')
-    system_prompt = (
-        'あなたは日本語音声書き起こしの統合エディタです。'
-        '**基準ソース**のテキストとセグメント分割を最優先で尊重し、'
-        '他のソースは**補完情報**としてのみ参照してください。'
-        '行の追加・削除・マージ・分割・並べ替えは絶対に行ってはいけません。'
-        '発話の主体・順序は基準ソースに従い、補完で文章の流れを変えてはいけません。'
+    logger.info(
+        f'merge start project={project_id} model={model} '
+        f'backbone={backbone_key} rows={len(rows)} '
+        f'ws={len(ws_items)} r1={len(run_items[1])} r2={len(run_items[2])} '
+        f'settings={settings}'
     )
 
-    user_prompt = f"""## 参加者
-{plist}
+    # ── Phase 4: チャンク分割 LLM 整流（並列）──────
+    chunks = _chunk_rows(rows, settings['chunk_size'], ctx=2)
+    sem = asyncio.Semaphore(settings['parallel'])
 
-## 基準ソース（時間軸・行構成の主軸）
-{backbone_label}{'（ユーザー指定）' if base_specified else '（自動選定）'}
+    async def _process_chunk(chunk):
+        async with sem:
+            sp, up = _build_chunk_prompt(chunk, plist, w_ws, w_run1, w_run2, run_engines)
+            raw = await _call_gemini_chunk(
+                sp, up, model,
+                max_tokens=settings['max_tokens_per_chunk'],
+                retry=settings['retry_per_chunk']
+            )
+            if raw is None:
+                return None
+            return _parse_jsonl(raw, len(chunk['rows']))
 
-## 補完優先度（基準以外の2ソースをどれだけ採用するか。0 は無視）
-WebSpeech : Run1({run_engines[1]}) : Run2({run_engines[2]}) = {w_ws} : {w_run1} : {w_run2}
+    llm_outputs = await asyncio.gather(*[_process_chunk(c) for c in chunks])
 
-## 必須ルール
-1. 出力は入力テーブルと **同じ行数・同じts・同じspeaker**（変更禁止）
-2. 各行の `text` は **基準ソースのテキストを最優先で採用**
-3. 基準ソースが空・極端に短い・明らかな誤認識の場合のみ、補完優先度の高い他ソースで置換または合成可
-4. 補完優先度 0 のソースは無視（候補から除外）
-5. すべての候補が空または「（なし）」なら、textは空文字 ""
-6. 単語間の不自然なスペース・全角スペースを除去
-7. 句読点（。、）を自然に補う
-8. 基準と補完で内容が大きく食い違う箇所は `text` 末尾に「【要確認:理由】」を付記（基準のテキストは残す）
-9. 話者ラベルが「未設定」の行は `text` 末尾に「【要確認:話者】」を付記
-10. 出力はJSONのみ（説明文・コードフェンス・余計な空行不要）
+    # ── Phase 5: 強制整合 ──────────────────────────
+    final_segs = []
+    fallback_chunks = 0
+    halluc_rows = 0
+    for chunk, llm_out in zip(chunks, llm_outputs):
+        if llm_out is None or len(llm_out) != len(chunk['rows']):
+            fallback_chunks += 1
+            for row in chunk['rows']:
+                final_text = row['backbone_text']
+                if row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
+                    final_text = (final_text + ' 【要確認:話者】').strip()
+                final_segs.append(_make_segment(row, final_text, None))
+        else:
+            for in_row, out in zip(chunk['rows'], llm_out):
+                text = ((out.get('text') if isinstance(out, dict) else '') or '').strip()
+                note = (out.get('note') if isinstance(out, dict) else None)
+                candidates = [in_row.get('cand_ws',''), in_row.get('cand_run1',''),
+                              in_row.get('cand_run2',''), in_row['backbone_text']]
+                if not text:
+                    final_text = in_row['backbone_text']
+                elif _detect_hallucination(text, candidates):
+                    halluc_rows += 1
+                    final_text = in_row['backbone_text']
+                    note = '要確認:幻覚検出'
+                else:
+                    final_text = text
+                if in_row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
+                    final_text = (final_text + ' 【要確認:話者】').strip()
+                final_segs.append(_make_segment(in_row, final_text, note))
 
-## 入力テーブル（{len(rows)}行）
-{table_block}
+    logger.info(
+        f'merge llm done chunks={len(chunks)} fallback={fallback_chunks} '
+        f'hallucinations={halluc_rows} final_rows={len(final_segs)}'
+    )
 
-## 出力形式
-[
-  {{"ts": "MM:SS", "speaker": "参加者名", "text": "...", "note": null または "要確認の理由"}},
-  ...
-]
-※ 出力は必ず {len(rows)} 要素の配列にすること。"""
-
-    if model not in ALLOWED_MODELS:
-        raise HTTPException(400, f'model must be one of: {list(ALLOWED_MODELS.keys())}')
-
-    logger.info(f'merge start project={project_id} model={model} '
-                f'weights ws={w_ws} run1={w_run1} run2={w_run2} '
-                f'backbone={backbone_key} rows={len(rows)} '
-                f'ref_segs={len(ref_segs)} txs={len(txs)}')
-
-    # ── Gemini API呼び出し（OpenAI互換エンドポイント）──
-    llm_payload = {
-        'model': model,
-        'messages': [
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user',   'content': user_prompt},
-        ],
-        'max_tokens': 16384,
-    }
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
-            f'{GEMINI_BASE}/chat/completions',
-            headers={
-                'Authorization': f'Bearer {GEMINI_KEY}',
-                'content-type': 'application/json',
-            },
-            json=llm_payload,
-        )
-        logger.info(f'Gemini response status={r.status_code}')
-        if r.status_code != 200:
-            logger.error(f'Gemini error: {r.text[:500]}')
-            raise HTTPException(502, f'Gemini API failed: {r.text}')
-        llm_resp = r.json()
-
-    raw = llm_resp['choices'][0]['message']['content'].strip()
-
-    # JSONブロック抽出（フェンスあり/なし/閉じ無し すべて対応）
-    fence_match = re.search(r'```(?:json)?\s*(.*?)(?:```|\Z)', raw, re.DOTALL)
-    if fence_match:
-        raw = fence_match.group(1).strip()
-
-    # 末尾を [ で始まり ] で終わる形に整形
-    start = raw.find('[')
-    if start != -1:
-        end = raw.rfind(']')
-        raw = raw[start:end+1] if end > start else raw[start:]
-
-    def _try_parse(s):
-        try: return json.loads(s)
-        except Exception: return None
-
-    result = _try_parse(raw)
-
-    # 切り詰めJSONの自動修復：最後の完全な } までで配列を閉じる
-    if result is None and raw.startswith('['):
-        last_obj_end = raw.rfind('}')
-        if last_obj_end > 0:
-            repaired = raw[:last_obj_end + 1] + ']'
-            result = _try_parse(repaired)
-            if result is not None:
-                logger.warning(f'LLM JSON repaired (truncated, salvaged {len(result)} items)')
-
-    if result is None:
-        logger.error(f'LLM parse error: raw={raw[:500]}')
-        raise HTTPException(502, f'LLM output parse error\nRaw head: {raw[:500]}')
-
-    logger.info(f'LLM parsed OK segments={len(result)}')
-
-    # ── ソーステキスト差分付加 ────────────────────────
-    def _ts_ms(ts: str) -> int:
-        parts = ts.split(':')
-        try:
-            return (int(parts[0]) * 60 + int(parts[1])) * 1000
-        except Exception:
-            return -1
-
-    def _strip_ja(text: str) -> str:
-        t = re.sub(r'([^\x00-\x7F])\s+([^\x00-\x7F])', r'\1\2', text or '')
-        t = re.sub(r'([^\x00-\x7F])\s+([^\x00-\x7F])', r'\1\2', t)
-        return re.sub(r'【要確認[^】]*】', '', t).strip()
-
-    # Web Speech: ts → text
-    ws_map = [(r['ts'], r['text']) for r in ref_segs]
-    # AAI: (start_ms, run_number, text)
-    aai_map = []
-    for tx in txs:
-        utts = json.loads(tx['utterances_json']) if tx['utterances_json'] else []
-        for utt in utts:
-            aai_map.append((
-                utt.get('start', 0),
-                f'Run{tx["run_number"]}',
-                _strip_ja(utt.get('text', ''))
-            ))
-
-    WINDOW_MS = 8000
-    for seg in result:
-        seg_ms = _ts_ms(seg.get('ts', '00:00'))
-        clean = _strip_ja(seg.get('text', ''))
+    # ── sources フィールド付加（Excel・管理画面用）─
+    for seg in final_segs:
         sources = {}
-
-        # Web Speech の最近傍セグメントを探す
-        best_ws = min(ws_map, key=lambda x: abs(_ts_ms(x[0]) - seg_ms), default=None)
-        if best_ws and abs(_ts_ms(best_ws[0]) - seg_ms) < WINDOW_MS:
-            ws_text = best_ws[1]
-            if _strip_ja(ws_text) != clean:
-                sources['Web Speech'] = ws_text
-
-        # AAI の最近傍発言を run ごとに探す
-        seen_runs = set()
-        for aai_ms, run_key, aai_text in sorted(aai_map, key=lambda x: abs(x[0] - seg_ms)):
-            if run_key in seen_runs:
-                continue
-            if abs(aai_ms - seg_ms) < WINDOW_MS:
-                if aai_text != clean:
-                    sources[run_key] = aai_text
-                seen_runs.add(run_key)
-            if len(seen_runs) >= 2:
-                break
-
+        norm_final = _normalize_for_compare(seg['text'])
+        for label, key in (('Web Speech', '_cand_ws'), ('Run1', '_cand_run1'), ('Run2', '_cand_run2')):
+            v = seg.get(key, '')
+            if v and _normalize_for_compare(v) != norm_final:
+                sources[label] = v
         if sources:
             seg['sources'] = sources
+        for k in ('_cand_ws', '_cand_run1', '_cand_run2'):
+            seg.pop(k, None)
 
-    # 要確認リスト生成
     notes = [
         {'ts': seg.get('ts'), 'speaker': seg.get('speaker'), 'note': seg.get('note')}
-        for seg in result if seg.get('note')
+        for seg in final_segs if seg.get('note')
     ]
 
     conn = get_conn()
     conn.execute(
         'INSERT INTO merged_transcripts(project_id,model,result_json,notes_json,created_at) VALUES(?,?,?,?,?)',
         (project_id, model,
-         json.dumps(result, ensure_ascii=False),
+         json.dumps(final_segs, ensure_ascii=False),
          json.dumps(notes, ensure_ascii=False),
          now_iso())
     )
@@ -1294,7 +1528,37 @@ WebSpeech : Run1({run_engines[1]}) : Run2({run_engines[2]}) = {w_ws} : {w_run1} 
     conn.commit()
     conn.close()
 
-    return {'ok': True, 'segments': len(result), 'notes': len(notes)}
+    return {
+        'ok': True,
+        'segments': len(final_segs),
+        'notes': len(notes),
+        'backbone': backbone_key,
+        'fallback_chunks': fallback_chunks,
+        'hallucinations': halluc_rows,
+    }
+
+
+# ── マージ設定 API ─────────────────────────────────
+@app.get('/api/settings/merge')
+def get_merge_settings_endpoint(_: str = Depends(require_admin)):
+    return _get_merge_settings()
+
+
+@app.put('/api/settings/merge')
+async def update_merge_settings_endpoint(request: Request, _: str = Depends(require_admin)):
+    body = await request.json()
+    clamped = _clamp_merge_settings(body or {})
+    conn = get_conn()
+    now = now_iso()
+    for k, v in clamped.items():
+        conn.execute(
+            'INSERT INTO merge_settings(key,value,updated_at) VALUES(?,?,?) '
+            'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+            (k, str(v), now)
+        )
+    conn.commit()
+    conn.close()
+    return _get_merge_settings()
 
 
 # ── 共通：Gemini呼び出しヘルパー ──────────────────
@@ -1412,74 +1676,68 @@ async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
     return {'ok': True, 'summary': summary, 'tasks': tasks}
 
 
-# ── Excel エクスポート（LLM最終版） ────────────────
-@app.get('/api/projects/{project_id}/export.xlsx')
-def export_project_xlsx(project_id: str, _: str = Depends(require_admin)):
+# ── Excel エクスポート（管理画面のタイムライン4カラムビューをそのまま書出） ──
+@app.post('/api/projects/{project_id}/export.xlsx')
+async def export_project_xlsx(project_id: str, request: Request,
+                              _: str = Depends(require_admin)):
+    """管理画面が組み立てた表データをそのままxlsxにする。
+    body: { meta:{name,model,summary,tasks,notes},
+            headers:[str,str,str,str],
+            rows:[{ts, cells:[str,str,str,str]}, ...] }
+    """
     from io import BytesIO
     from urllib.parse import quote
     from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
 
-    conn = get_conn()
-    proj = conn.execute('SELECT id,name,created_at FROM projects WHERE id=?', (project_id,)).fetchone()
-    if not proj:
-        conn.close()
-        raise HTTPException(404, 'project not found')
-    merged = conn.execute(
-        'SELECT * FROM merged_transcripts WHERE project_id=? ORDER BY id DESC LIMIT 1',
-        (project_id,)
-    ).fetchone()
-    conn.close()
-    if not merged:
-        raise HTTPException(404, 'LLM最終版未生成')
-
-    result  = json.loads(merged['result_json']) if merged['result_json'] else []
-    notes   = json.loads(merged['notes_json'])  if merged['notes_json']  else []
-    tasks   = json.loads(merged['tasks_json'])  if merged['tasks_json']  else []
-    summary = merged['summary'] or ''
+    payload = await request.json()
+    meta    = payload.get('meta') or {}
+    headers = payload.get('headers') or ['★ LLM最終版', 'Web Speech', 'Run1', 'Run2']
+    rows    = payload.get('rows') or []
+    summary = (meta.get('summary') or '').strip()
+    tasks   = meta.get('tasks') or []
+    notes   = meta.get('notes') or []
+    name    = meta.get('name') or 'meeting'
+    model   = meta.get('model') or ''
 
     wb = Workbook()
+    header_font = Font(bold=True, color='FFFFFF', size=11)
+    header_fill = PatternFill('solid', fgColor='4B0082')
+    thin = Side(border_style='thin', color='CCCCCC')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wrap_top = Alignment(wrap_text=True, vertical='top')
 
-    # === Transcript シート ===
+    # === Transcript（タイムライン4カラム比較） ===
     ws = wb.active
     ws.title = 'Transcript'
-    header_font = Font(bold=True, color='FFFFFF')
-    header_fill = PatternFill('solid', fgColor='4B0082')
-    headers = ['#', 'ts', '話者', '最終テキスト', '備考(note)', 'WS候補', 'Run1候補', 'Run2候補']
-    ws.append(headers)
-    for col_idx in range(1, len(headers) + 1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-    for i, seg in enumerate(result, 1):
-        src = seg.get('sources') or {}
-        ws.append([
-            i,
-            seg.get('ts', ''),
-            seg.get('speaker', ''),
-            seg.get('text', ''),
-            seg.get('note') or '',
-            src.get('Web Speech', ''),
-            src.get('Run1', ''),
-            src.get('Run2', ''),
-        ])
-    # 列幅
-    widths = [5, 8, 14, 60, 30, 40, 40, 40]
-    for i, w in enumerate(widths, 1):
+    full_headers = ['ts'] + list(headers)
+    ws.append(full_headers)
+    for col_idx in range(1, len(full_headers) + 1):
+        c = ws.cell(row=1, column=col_idx)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = Alignment(horizontal='center', vertical='center')
+        c.border = border
+    for r in rows:
+        ts = r.get('ts') or ''
+        cells = list(r.get('cells') or [])
+        cells = (cells + ['', '', '', ''])[:4]
+        ws.append([ts] + cells)
+    for i, w in enumerate([8, 50, 50, 50, 50], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    # テキスト列は折返し
-    for row in ws.iter_rows(min_row=2, max_col=8):
+    for row in ws.iter_rows(min_row=2, max_col=5):
         for cell in row:
-            cell.alignment = Alignment(wrap_text=True, vertical='top')
-    ws.freeze_panes = 'A2'
+            cell.alignment = wrap_top
+            cell.border = border
+    ws.freeze_panes = 'B2'
 
     # === Summary シート ===
-    if summary:
-        ws2 = wb.create_sheet('Summary')
-        ws2.column_dimensions['A'].width = 100
-        ws2.cell(row=1, column=1, value=summary).alignment = Alignment(wrap_text=True, vertical='top')
+    ws2 = wb.create_sheet('Summary')
+    ws2.column_dimensions['A'].width = 100
+    if model:
+        ws2.cell(row=1, column=1, value=f'モデル: {model}').font = Font(italic=True, color='666666')
+    ws2.cell(row=3, column=1, value=summary or '（要約未生成）').alignment = wrap_top
 
     # === Tasks シート ===
     ws3 = wb.create_sheet('Tasks')
@@ -1488,13 +1746,15 @@ def export_project_xlsx(project_id: str, _: str = Depends(require_admin)):
         c = ws3.cell(row=1, column=col_idx)
         c.font = header_font; c.fill = header_fill
         c.alignment = Alignment(horizontal='center')
+        c.border = border
     for i, t in enumerate(tasks, 1):
         ws3.append([i, str(t)])
     ws3.column_dimensions['A'].width = 5
     ws3.column_dimensions['B'].width = 80
     for row in ws3.iter_rows(min_row=2, max_col=2):
         for cell in row:
-            cell.alignment = Alignment(wrap_text=True, vertical='top')
+            cell.alignment = wrap_top
+            cell.border = border
 
     # === Issues シート（要確認） ===
     ws4 = wb.create_sheet('Issues')
@@ -1503,6 +1763,7 @@ def export_project_xlsx(project_id: str, _: str = Depends(require_admin)):
         c = ws4.cell(row=1, column=col_idx)
         c.font = header_font; c.fill = header_fill
         c.alignment = Alignment(horizontal='center')
+        c.border = border
     for n in notes:
         ws4.append([n.get('ts', ''), n.get('speaker', ''), n.get('note', '')])
     ws4.column_dimensions['A'].width = 8
@@ -1513,8 +1774,7 @@ def export_project_xlsx(project_id: str, _: str = Depends(require_admin)):
     wb.save(buf)
     buf.seek(0)
 
-    # ファイル名（日本語対応 RFC5987）
-    safe_name = re.sub(r'[\\/:*?"<>|]', '_', (proj['name'] or 'meeting'))[:80]
+    safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)[:80]
     ts = datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d-%H%M')
     fname = f'{safe_name}_{ts}.xlsx'
     cd = f"attachment; filename=\"export.xlsx\"; filename*=UTF-8''{quote(fname)}"
