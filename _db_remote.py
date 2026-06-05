@@ -173,6 +173,8 @@ def init_db():
         # Zoom 連携（v1）
         'ALTER TABLE recordings ADD COLUMN zoom_participant_name TEXT',
         "ALTER TABLE projects ADD COLUMN source TEXT NOT NULL DEFAULT 'mobile'",
+        # 録音音声 追加・並び替え（v1）
+        'ALTER TABLE projects ADD COLUMN recordings_updated_at TEXT',
     ]:
         try:
             conn.execute(sql)

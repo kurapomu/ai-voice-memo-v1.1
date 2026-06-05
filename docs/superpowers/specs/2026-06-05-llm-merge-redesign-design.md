@@ -159,7 +159,7 @@ llm_outputs = await asyncio.gather(*[_process_chunk(c) for c in chunks])
 **行レベルの整合（LLM 出力が形上正しい場合）**:
 - 各行で:
   1. 出力 `text` が空文字 → 主軸生テキストで埋める
-  2. `_detect_hallucination(text, candidates)` が True → 主軸生テキストで上書き、`note='要確認:幻覚検出'`、`halluc_rows += 1`
+  2. `_detect_hallucination(text, candidates)` が True → 主軸生テキストで上書き、`note='要確認:LLM過剰補填可能性'`、`halluc_rows += 1`
   3. それ以外は LLM 出力 `text` を採用、`note` も LLM 出力を採用
 - どの場合も `sp_uncertain=True` なら末尾に `【要確認:話者】` を付記
 

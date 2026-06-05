@@ -1554,7 +1554,7 @@ async def merge_project(project_id: str,
                 elif _detect_hallucination(text, candidates):
                     halluc_rows += 1
                     final_text = in_row['backbone_text']
-                    note = '要確認:幻覚検出'
+                    note = '要確認:LLM過剰補填可能性'
                 else:
                     final_text = text
                 if in_row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
@@ -2090,6 +2090,129 @@ async def delete_project(project_id: str, _: str = Depends(require_admin)):
     conn.close()
     logger.info(f'Project deleted: {project_id}')
     return {'ok': True}
+
+
+# ── 録音音声 追加アップロード ────────────────────
+@app.post('/api/projects/{project_id}/recordings')
+async def add_recordings(project_id: str, request: Request,
+                          _: str = Depends(require_admin)):
+    """既存プロジェクトに音声ファイルを追加する。
+
+    multipart:
+      - files: 音声ファイル（複数可）
+      - meta: JSON 文字列 {speakers:[{filename, name}]} 任意
+    """
+    form = await request.form()
+    files = form.getlist('files')
+    if not files:
+        raise HTTPException(400, 'no files uploaded')
+    try:
+        meta = json.loads(form.get('meta', '{}'))
+    except Exception:
+        meta = {}
+    name_map = {p['filename']: p['name']
+                for p in meta.get('speakers', []) if 'filename' in p}
+
+    conn = get_conn()
+    proj = conn.execute('SELECT id FROM projects WHERE id=?', (project_id,)).fetchone()
+    if not proj:
+        conn.close()
+        raise HTTPException(404, 'project not found')
+
+    max_seq_row = conn.execute(
+        'SELECT COALESCE(MAX(seq),-1) AS m FROM recordings WHERE project_id=?',
+        (project_id,)
+    ).fetchone()
+    next_seq = int(max_seq_row['m']) + 1
+    max_part_row = conn.execute(
+        'SELECT COALESCE(MAX(idx),0) AS m FROM participants WHERE project_id=?',
+        (project_id,)
+    ).fetchone()
+    next_part_idx = int(max_part_row['m']) + 1
+
+    proj_dir = f'/var/jizo/audio/{project_id}'
+    os.makedirs(proj_dir, exist_ok=True)
+
+    added = []
+    for f in files:
+        fname = getattr(f, 'filename', f'audio_{next_seq}.m4a')
+        ext = os.path.splitext(fname)[1].lstrip('.').lower() or 'm4a'
+        dst = os.path.join(proj_dir, f'{next_seq:02d}_{fname}')
+        content = await f.read()
+        with open(dst, 'wb') as out:
+            out.write(content)
+        mime = getattr(f, 'content_type', None) or f'audio/{ext}'
+        speaker = name_map.get(fname) or os.path.splitext(fname)[0]
+
+        cur = conn.execute(
+            'INSERT INTO recordings(project_id,seq,audio_path,mime,duration,'
+            'created_at,zoom_participant_name) VALUES(?,?,?,?,?,?,?)',
+            (project_id, next_seq, dst, mime, '', now_iso(), speaker),
+        )
+        conn.execute(
+            'INSERT INTO participants(project_id,idx,name) VALUES(?,?,?)',
+            (project_id, next_part_idx, speaker),
+        )
+        added.append({'recording_id': cur.lastrowid, 'seq': next_seq,
+                      'speaker': speaker, 'filename': fname})
+        next_seq += 1
+        next_part_idx += 1
+
+    conn.execute(
+        'UPDATE projects SET recordings_updated_at=? WHERE id=?',
+        (now_iso(), project_id),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f'recordings added: project={project_id} count={len(added)}')
+    return {'ok': True, 'added': added}
+
+
+# ── 録音音声 順序入替 ────────────────────────────
+@app.patch('/api/projects/{project_id}/recordings/order')
+async def reorder_recordings(project_id: str, request: Request,
+                              _: str = Depends(require_admin)):
+    """recording_id 配列の順で seq を 0..N-1 に再割り当て。
+
+    body: {"order": [recording_id, ...]}
+    """
+    body = await request.json()
+    order = body.get('order', [])
+    if not isinstance(order, list) or not order:
+        raise HTTPException(400, 'order must be non-empty list of recording_id')
+
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT id FROM recordings WHERE project_id=?', (project_id,)
+    ).fetchall()
+    existing_ids = {r['id'] for r in rows}
+    given_ids = set(order)
+    if existing_ids != given_ids:
+        conn.close()
+        raise HTTPException(
+            400,
+            f'order must contain exactly all recordings of this project. '
+            f'expected={sorted(existing_ids)} given={sorted(given_ids)}',
+        )
+
+    # 衝突回避：いったん全部マイナスに退避
+    conn.execute(
+        'UPDATE recordings SET seq = -1000 - seq WHERE project_id=?',
+        (project_id,),
+    )
+    for new_seq, rid in enumerate(order):
+        conn.execute(
+            'UPDATE recordings SET seq=? WHERE id=? AND project_id=?',
+            (new_seq, rid, project_id),
+        )
+    conn.execute(
+        'UPDATE projects SET recordings_updated_at=? WHERE id=?',
+        (now_iso(), project_id),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f'recordings reordered: project={project_id} count={len(order)}')
+    return {'ok': True, 'order': order}
 
 
 # ── 音声ファイル配信（管理画面） ────────────────────

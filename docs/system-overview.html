@@ -483,7 +483,7 @@ sequenceDiagram
   "fallback_chunks": 1,      // LLM が壊れて決定論で補償したチャンク数
   "hallucinations": 0        // 幻覚検出して上書きした行数
 }</pre>
-    <p style="font-size:14px"><code>fallback_chunks &gt; 0</code> でも結果は完成している（決定論フォールバックで補償済み）。<code>hallucinations &gt; 0</code> の行は <code>note=「要確認:幻覚検出」</code> が付き、管理画面の要確認リストに集約される。</p>
+    <p style="font-size:14px"><code>fallback_chunks &gt; 0</code> でも結果は完成している（決定論フォールバックで補償済み）。<code>hallucinations &gt; 0</code> の行は <code>note=「要確認:LLM過剰補填可能性」</code> が付き、管理画面の要確認リストに集約される。</p>
   </section>
 
   <!-- 6. 制約 -->
