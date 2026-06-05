@@ -1,0 +1,494 @@
+From 1e9ca28f2a60951a0cd0057f7b7ac09d17f4d88e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 5 Jun 2026 10:37:19 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20LLM=E6=9C=80=E7=B5=82=E7=89=88=E3=83=88?=
+ =?UTF-8?q?=E3=83=A9=E3=83=B3=E3=82=B9=E3=82=AF=E3=83=AA=E3=83=97=E3=83=88?=
+ =?UTF-8?q?=E3=81=AE=E8=A9=B1=E8=80=85=E5=90=8D=E3=82=92=E3=83=AC=E3=82=B3?=
+ =?UTF-8?q?=E3=83=BC=E3=83=89=E5=8D=98=E4=BD=8D=E3=81=A7=E7=B7=A8=E9=9B=86?=
+ =?UTF-8?q?=E5=8F=AF=E8=83=BD=E3=81=AB?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+管理画面の★LLM最終版列の話者ラベルをクリックで参加者一覧のドロップダウンに
+切替・1クリックで保存。merged_transcripts.result_json[row_idx].speaker を
+PATCH /api/projects/{id}/merged/speaker で上書き。再マージ不要で押下漏れ・
+継承誤り・Deepgramクラスタリング誤りを人手補正できる。
+
+- 新API: PATCH /api/projects/{project_id}/merged/speaker (require_admin)
+- 編集対象は最新 merged_transcripts のみ・空文字/範囲外は400
+- 末尾「【要確認:話者】」タグがあれば自動除去
+- LLM列のみ編集可能・他列(WS/Run1/Run2)は据え置き
+- 編集後の話者色も即時反映・キャッシュ同期で再描画整合
+- Excel/4カラム比較/全文コピーは同じresult_json由来で自動同期
+- 要約/タスク/Q&Aは別カラム・変更されない(仕様)
+---
+ _admin_remote.html | 255 +++++++++++++++++++++++++++++++++++++++++----
+ _main_remote.py    |  55 ++++++++++
+ 2 files changed, 287 insertions(+), 23 deletions(-)
+
+diff --git a/_admin_remote.html b/_admin_remote.html
+index af6fe0e..e9a95c3 100644
+--- a/_admin_remote.html
++++ b/_admin_remote.html
+@@ -125,6 +125,10 @@ button:disabled{opacity:.4;cursor:default}
+ .compare-cell.cell-diff{background:rgba(251,191,36,.1);border-left:2px solid var(--yellow)}
+ .cell-meta{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+ .cell-speaker{font-size:12px;font-weight:700}
++.cell-speaker.editable{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
++.cell-speaker.editable:hover{background:var(--surface2)}
++.speaker-select{font-size:12px;padding:2px 4px;background:var(--bg);color:var(--text);
++  border:1px solid var(--border);border-radius:4px}
+ .cell-ts{font-size:11px;color:var(--sub)}
+ .cell-body{font-size:14px;line-height:1.5;word-break:break-all}
+ .cell-empty{color:var(--border);font-size:18px}
+@@ -334,11 +338,11 @@ body.modal-open{overflow:hidden}
+     <div style="padding:10px 12px;border-bottom:1px solid var(--border);background:rgba(56,189,248,0.06);display:flex;flex-direction:column;gap:6px">
+       <button onclick="openZoomCloudModal()"
+         style="width:100%;padding:8px;background:var(--sky);color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer">
+-        ☁ Zoom録画一覧から取り込み
++        Zoom録画一覧から取り込み
+       </button>
+       <button onclick="openZoomUploadModal()"
+         style="width:100%;padding:7px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;cursor:pointer">
+-        他組織MTGをファイルアップロード
++        音声ファイルのアップロード
+       </button>
+     </div>
+ 
+@@ -382,11 +386,11 @@ body.modal-open{overflow:hidden}
+       <div onclick="closeZoomCloudModal()" style="position:absolute;inset:0;background:rgba(0,0,0,.7)"></div>
+       <div style="position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(760px,94vw);max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;z-index:1">
+         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+-          <h3 style="font-size:16px;font-weight:700;margin:0">☁ Zoom Cloud 録画一覧</h3>
++          <h3 style="font-size:16px;font-weight:700;margin:0">Zoom Cloud 録画一覧</h3>
+           <button onclick="closeZoomCloudModal()" style="background:transparent;color:var(--text-sub);border:0;font-size:18px;cursor:pointer">×</button>
+         </div>
+         <div style="font-size:12px;color:var(--sub);line-height:1.5">
+-          自Zoomアカウント主催のクラウド録画のみ表示されます。他組織主催のMTGは「他組織MTGをファイルアップロード」をご利用ください。
++          自Zoomアカウント主催のクラウド録画のみ表示されます。他組織主催MTGや外部録音は「音声ファイルのアップロード」をご利用ください。
+         </div>
+         <div style="display:flex;gap:8px;align-items:center;font-size:13px">
+           <label style="color:var(--sub)">期間:</label>
+@@ -396,7 +400,7 @@ body.modal-open{overflow:hidden}
+             <option value="90">過去90日</option>
+             <option value="180">過去180日</option>
+           </select>
+-          <button onclick="loadZoomCloud()" class="btn-ghost btn-sm" style="font-size:12px">🔄 更新</button>
++          <button onclick="loadZoomCloud()" class="btn-ghost btn-sm" style="font-size:12px">更新</button>
+           <span id="zoom-cloud-status" style="margin-left:auto;font-size:12px;color:var(--sub)"></span>
+         </div>
+         <div id="zoom-cloud-list" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
+@@ -409,13 +413,16 @@ body.modal-open{overflow:hidden}
+     <div id="zoom-upload-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center">
+       <div onclick="closeZoomUploadModal()" style="position:absolute;inset:0;background:rgba(0,0,0,.7)"></div>
+       <div style="position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(640px,92vw);max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;z-index:1">
+-        <h3 style="font-size:16px;font-weight:700">
+-          Zoom 録画ファイルから取り込み
+-          <span style="font-size:12px;color:var(--sub);font-weight:400;margin-left:8px">（他組織主催 MTG 用）</span>
+-        </h3>
++        <h3 style="font-size:16px;font-weight:700">音声ファイルのアップロード</h3>
+         <div style="font-size:12px;color:var(--sub);line-height:1.6">
+-          Zoom の「参加者ごとの音声ファイル（Separate Audio Files）」を選択してください。<br>
+-          ファイル1つ = 話者1人。各ファイルに対して話者名を指定できます。
++          複数ファイルを選択すると、ファイル1つ＝話者1人として話者分離されます。<br>
++          単一ファイルの場合は全員ミックス音声として処理されます（話者分離不可）。<br>
++          <strong style="color:var(--text)">話者名はファイル選択後に編集欄が表示されます</strong>（ファイル名から自動推定・編集可）。
++        </div>
++        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--sub);line-height:1.7">
++          <strong style="color:var(--text)">制約:</strong>
++          1ファイルあたり <strong>最大100MB</strong> / <strong>最大60分</strong> ・
++          対応拡張子: <code>.m4a / .mp4 / .wav / .mp3 / .webm / .ogg / .flac</code>
+         </div>
+         <div>
+           <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">MTG名 <span style="color:var(--red)">*</span></label>
+@@ -423,7 +430,12 @@ body.modal-open{overflow:hidden}
+         </div>
+         <div>
+           <label style="display:block;font-size:12px;color:var(--sub);font-weight:600;margin-bottom:4px">音声ファイル（複数選択可） <span style="color:var(--red)">*</span></label>
+-          <input id="zoom-up-files" type="file" multiple accept="audio/*,.m4a,.mp4,.wav,.mp3" onchange="onZoomFilesChange()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;padding:8px">
++          <button type="button" onclick="pickAudioFilesFromDownloads()"
++            style="width:100%;background:var(--sky);color:#fff;border:0;border-radius:6px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:6px">
++            ダウンロードフォルダから選択
++          </button>
++          <input id="zoom-up-files" type="file" multiple accept="audio/*,.m4a,.mp4,.wav,.mp3,.webm,.ogg,.flac" onchange="onZoomFilesChange()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:8px">
++          <div style="font-size:10px;color:var(--sub);margin-top:4px">上のボタンが使えないブラウザ（Safari等）は下のフィールドから選択してください</div>
+         </div>
+         <div id="zoom-up-mapping" style="font-size:12px;display:none">
+           <div style="font-weight:600;color:var(--sub);margin-bottom:6px">話者名（ファイル名から自動推定。必要なら編集してください）</div>
+@@ -760,6 +772,7 @@ body.modal-open{overflow:hidden}
+ <script>
+ const API = '';
+ let currentProjectId = null;
++let currentProject = null;
+ let pollTimer = null;
+ let authHeader = sessionStorage.getItem('admin_auth') || '';
+ const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
+@@ -871,7 +884,7 @@ function renderZoomCloudItem(it) {
+   const ts = it.start_time ? formatDate(it.start_time) : (it.webhook_notified_at ? formatDate(it.webhook_notified_at) : '');
+   const dur = (it.duration_min != null) ? `${it.duration_min}分` : '—';
+   const fc = (it.file_count != null) ? `${it.file_count}ファイル` : '';
+-  const pSep = it.has_participant_audio ? '✓話者別音声あり' : (it.source === 'zoom_api' ? '⚠ミックスのみ' : '');
++  const pSep = it.has_participant_audio ? '話者別音声あり' : (it.source === 'zoom_api' ? 'ミックスのみ（話者分離不可）' : '');
+ 
+   let badge = '', btnHtml = '';
+   const uuidEnc = encodeURIComponent(it.uuid || '');
+@@ -968,25 +981,120 @@ function onZoomFilesChange() {
+   const files = document.getElementById('zoom-up-files').files;
+   const wrap  = document.getElementById('zoom-up-mapping');
+   const list  = document.getElementById('zoom-up-mapping-list');
++  const status = document.getElementById('zoom-up-status');
++  status.innerHTML = '';
+   if (!files.length) { wrap.style.display = 'none'; return; }
+   wrap.style.display = 'block';
+   list.innerHTML = '';
++
++  const MAX_BYTES = 100 * 1024 * 1024;   // 100MB
++  const MAX_SECONDS = 60 * 60;           // 60分
++  const ALLOWED_EXT = ['m4a','mp4','wav','mp3','webm','ogg','flac'];
++
+   Array.from(files).forEach((f, i) => {
+-    // 拡張子を除いたファイル名を話者名の初期値に
+     const baseName = f.name.replace(/\.[^.]+$/, '');
+-    // Zoom 標準命名 "audio{N}_{Display Name}.m4a" のパターンを抽出
++    const ext = (f.name.split('.').pop() || '').toLowerCase();
+     const m = baseName.match(/^audio\d+_(.+)$/);
+     const guess = m ? m[1] : baseName;
++
++    const sizeMb = (f.size / 1024 / 1024).toFixed(1);
++    const errs = [];
++    if (!ALLOWED_EXT.includes(ext)) errs.push(`非対応拡張子(.${ext})`);
++    if (f.size > MAX_BYTES) errs.push(`容量超過(${sizeMb}MB / 100MB)`);
++
+     const row = document.createElement('div');
+-    row.style.cssText = 'display:flex;align-items:center;gap:8px';
++    row.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2)';
++    row.dataset.invalid = errs.length > 0 ? '1' : '0';
+     row.innerHTML = `
+-      <span style="flex:0 0 50%;font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
+-      <span style="color:var(--sub)">→</span>
+-      <input type="text" data-zoom-filename="${escHtml(f.name)}" value="${escHtml(guess)}"
+-        style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:5px 8px">
++      <div style="display:flex;align-items:center;gap:8px">
++        <span style="flex:0 0 50%;font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
++        <span style="color:var(--sub)">→</span>
++        <input type="text" data-zoom-filename="${escHtml(f.name)}" value="${escHtml(guess)}"
++          style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:5px 8px">
++      </div>
++      <div data-meta style="font-size:10px;color:var(--sub)">${sizeMb}MB / 時間計測中…</div>
+     `;
+     list.appendChild(row);
++
++    // 時間チェック（audio 要素でメタデータ取得）
++    const url = URL.createObjectURL(f);
++    const audio = document.createElement('audio');
++    audio.preload = 'metadata';
++    audio.src = url;
++    audio.onloadedmetadata = () => {
++      const dur = audio.duration || 0;
++      URL.revokeObjectURL(url);
++      const min = Math.floor(dur / 60);
++      const sec = Math.floor(dur % 60).toString().padStart(2, '0');
++      const meta = row.querySelector('[data-meta]');
++      const durErrs = [...errs];
++      if (dur > MAX_SECONDS) durErrs.push(`時間超過(${min}:${sec} / 60:00)`);
++      row.dataset.invalid = durErrs.length > 0 ? '1' : '0';
++      if (durErrs.length > 0) {
++        meta.innerHTML = `<span style="color:var(--red);font-weight:600">エラー: ${durErrs.join(' / ')}</span>`;
++        row.style.borderColor = 'var(--red)';
++      } else {
++        meta.textContent = `${sizeMb}MB / ${min}:${sec}`;
++      }
++      updateUploadSubmitState();
++    };
++    audio.onerror = () => {
++      URL.revokeObjectURL(url);
++      const meta = row.querySelector('[data-meta]');
++      const fullErrs = [...errs, '音声として読めない（破損 or 非対応コーデック）'];
++      row.dataset.invalid = '1';
++      meta.innerHTML = `<span style="color:var(--red);font-weight:600">エラー: ${fullErrs.join(' / ')}</span>`;
++      row.style.borderColor = 'var(--red)';
++      updateUploadSubmitState();
++    };
+   });
++  updateUploadSubmitState();
++}
++
++// File System Access API でダウンロードフォルダから開く（Chrome/Edge）
++async function pickAudioFilesFromDownloads() {
++  const input = document.getElementById('zoom-up-files');
++  if (!window.showOpenFilePicker) {
++    // 非対応ブラウザは通常 input を起動
++    input.click();
++    return;
++  }
++  try {
++    const handles = await window.showOpenFilePicker({
++      multiple: true,
++      startIn: 'downloads',
++      types: [{
++        description: '音声ファイル',
++        accept: {'audio/*': ['.m4a','.mp4','.wav','.mp3','.webm','.ogg','.flac']},
++      }],
++    });
++    const files = await Promise.all(handles.map(h => h.getFile()));
++    // input.files に転送（DataTransfer 経由）
++    const dt = new DataTransfer();
++    files.forEach(f => dt.items.add(f));
++    input.files = dt.files;
++    onZoomFilesChange();
++  } catch (e) {
++    if (e.name !== 'AbortError') {
++      console.error('file picker failed', e);
++      input.click(); // フォールバック
++    }
++  }
++}
++
++function updateUploadSubmitState() {
++  const rows = document.querySelectorAll('#zoom-up-mapping-list [data-invalid]');
++  const hasError = Array.from(rows).some(r => r.dataset.invalid === '1');
++  const btn = document.getElementById('zoom-up-submit');
++  const status = document.getElementById('zoom-up-status');
++  btn.disabled = hasError;
++  btn.style.opacity = hasError ? '0.5' : '1';
++  btn.style.cursor = hasError ? 'not-allowed' : 'pointer';
++  if (hasError) {
++    status.innerHTML = '<span style="color:var(--red)">制約違反のファイルがあります。除外してから再選択してください</span>';
++  } else {
++    status.innerHTML = '';
++  }
+ }
+ 
+ async function submitZoomUpload() {
+@@ -1072,6 +1180,7 @@ async function selectProject(id) {
+ }
+ 
+ function renderDetail(p) {
++  currentProject = p;
+   const names = p.participants.map(pt => pt.name || `話者${pt.idx+1}`).join('・') || '（参加者なし）';
+   document.getElementById('proj-title').textContent = formatDate(p.created_at);
+   document.getElementById('proj-sub').innerHTML = `${escHtml(names)}&nbsp;&nbsp;${statusBadge(p.status)}`;
+@@ -1203,6 +1312,67 @@ function textSim(a, b) {
+   return (A.size + B.size) === 0 ? 0 : (2 * inter) / (A.size + B.size);
+ }
+ 
++async function startSpeakerEdit(el) {
++  if (el.dataset.editing === '1') return;
++  el.dataset.editing = '1';
++  const oldValue = el.textContent.trim();
++  const rowIdx = parseInt(el.dataset.rowIdx, 10);
++  const candidates = Array.isArray(currentProject?.participants)
++    ? currentProject.participants.map(p => p.name).filter(Boolean)
++    : [];
++  const options = Array.from(new Set([oldValue, ...candidates, '未設定']))
++                       .filter(Boolean);
++
++  const select = document.createElement('select');
++  select.className = 'speaker-select';
++  options.forEach(name => {
++    const o = document.createElement('option');
++    o.value = name; o.textContent = name;
++    if (name === oldValue) o.selected = true;
++    select.appendChild(o);
++  });
++  const origColor = el.style.color;
++  el.innerHTML = '';
++  el.appendChild(select);
++  select.focus();
++
++  let done = false;
++  const finish = async () => {
++    if (done) return; done = true;
++    const newValue = select.value;
++    if (newValue === oldValue) {
++      el.textContent = oldValue;
++      el.dataset.editing = '';
++      return;
++    }
++    try {
++      const res = await apiFetch(
++        `/api/projects/${currentProject.id}/merged/speaker`,
++        { method: 'PATCH',
++          headers: {'content-type': 'application/json'},
++          body: JSON.stringify({ row_idx: rowIdx, speaker: newValue }) }
++      );
++      if (!res.ok) throw new Error(await res.text());
++      el.textContent = newValue;
++      const newIdx = currentProject.participants.findIndex(pt => pt.name === newValue);
++      el.style.color = newIdx >= 0
++        ? SPEAKER_COLORS[newIdx % SPEAKER_COLORS.length]
++        : (newValue === '未設定' ? 'var(--sub)' : 'var(--purple)');
++      if (currentProject.merged?.result?.[rowIdx]) {
++        currentProject.merged.result[rowIdx].speaker = newValue;
++      }
++    } catch (e) {
++      alert('話者変更に失敗: ' + e.message);
++      el.textContent = oldValue;
++      el.style.color = origColor;
++    } finally {
++      el.dataset.editing = '';
++    }
++  };
++  select.addEventListener('change', finish);
++  select.addEventListener('blur', finish);
++}
++
+ function renderMerged(p) {
+   const section = document.getElementById('merged-section');
+   if (!p.merged) { section.style.display = 'none'; return; }
+@@ -1223,12 +1393,12 @@ function renderMerged(p) {
+ 
+   // 全ソースを {ms, col, seg, ...} で統一形式に集約
+   const items = [];
+-  (p.merged.result || []).forEach(seg => {
++  (p.merged.result || []).forEach((seg, origIdx) => {
+     const spkIdx = p.participants.findIndex(pt => pt.name === seg.speaker);
+     const spkColor = spkIdx >= 0 ? SPEAKER_COLORS[spkIdx % SPEAKER_COLORS.length] : 'var(--purple)';
+     items.push({
+       ms: tsToMs(seg.ts), col: 'llm',
+-      seg: {...seg, color: spkColor}
++      seg: {...seg, color: spkColor, _resultIdx: origIdx}
+     });
+   });
+   p.ref_segments.forEach(s => {
+@@ -1386,9 +1556,13 @@ function renderMerged(p) {
+       const tsHtml = s.ts ? `<span class="cell-ts">${escHtml(s.ts)}</span>` : '';
+       const noteHtml = s.note ? `<span class="cell-note-tag">⚠ ${escHtml(s.note)}</span>` : '';
+       const sep = i > 0 ? '<hr style="border:0;border-top:1px dashed #333;margin:6px 0">' : '';
++      const isLlm = col === 'llm';
++      const editable = (isLlm && Number.isInteger(s._resultIdx))
++        ? ` class="cell-speaker editable" data-row-idx="${s._resultIdx}" onclick="startSpeakerEdit(this)"`
++        : ` class="cell-speaker"`;
+       return `${sep}
+         <div class="cell-meta">
+-          <span class="cell-speaker" style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
++          <span${editable} style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
+           ${tsHtml}
+         </div>
+         <div class="cell-body">${escHtml(s.text || '')}</div>
+@@ -1805,6 +1979,31 @@ async function submitUpload() {
+   }
+ }
+ 
++// APIキー取得サイト・課金情報（2026-06時点）
++const SVC_INFO = {
++  whisper: {
++    url:  'https://platform.openai.com/api-keys',
++    cc:   '必須',
++    ccColor: 'var(--red)',
++    price: '$0.006/分（約0.9円/分）',
++    note: '前払いクレジット制。最小$5〜チャージ。',
++  },
++  deepgram: {
++    url:  'https://console.deepgram.com/signup',
++    cc:   '初回不要',
++    ccColor: '#22c55e',
++    price: 'Nova-3 $0.0043/分（約0.6円/分）',
++    note: '新規登録で$200無料クレジット。クレカ無しで開始可。',
++  },
++  gemini: {
++    url:  'https://aistudio.google.com/app/apikey',
++    cc:   '無料枠は不要',
++    ccColor: '#22c55e',
++    price: 'Flash $0.075/1M tok入力, $0.30/1M tok出力',
++    note: '無料枠あり（15 RPM/1500日）。有料化にはGCPプロジェクト＋請求先設定。',
++  },
++};
++
+ function renderApiKeys(keys) {
+   const wrap = document.getElementById('api-keys-list');
+   wrap.innerHTML = '';
+@@ -1815,6 +2014,7 @@ function renderApiKeys(keys) {
+     const k = keys[svc];
+     const label = svc === 'gemini-flash' ? 'Google Gemini' : SVC_LABELS[svc].name;
+     const editKey = editKeyMap[svc];
++    const info = SVC_INFO[editKey];
+     const div = document.createElement('div');
+     div.className = 'svc-card';
+     div.dataset.editKey = editKey;
+@@ -1831,6 +2031,15 @@ function renderApiKeys(keys) {
+             border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer">✏ 編集</button>
+         </div>
+       </div>
++      ${info ? `<div style="margin-top:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:12px;line-height:1.6">
++        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
++          <a href="${info.url}" target="_blank" rel="noopener"
++            style="color:var(--sky);text-decoration:none;font-weight:600">APIキー取得サイト ›</a>
++          <span style="color:var(--sub)">クレカ: <span style="color:${info.ccColor};font-weight:600">${info.cc}</span></span>
++        </div>
++        <div style="color:var(--sub);margin-top:4px"><strong style="color:var(--text)">料金:</strong> ${escHtml(info.price)}</div>
++        <div style="color:var(--sub);margin-top:2px;font-size:11px">${escHtml(info.note)}</div>
++      </div>` : ''}
+       <div class="key-edit-form" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+         <input type="text" class="key-input" placeholder="新しいAPIキーを貼り付け"
+           style="width:100%;background:var(--bg);border:1px solid var(--border);
+diff --git a/_main_remote.py b/_main_remote.py
+index 4bd2e8a..cfc75b3 100644
+--- a/_main_remote.py
++++ b/_main_remote.py
+@@ -1744,6 +1744,61 @@ async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
+     return {'ok': True, 'summary': summary, 'tasks': tasks}
+ 
+ 
++# ── LLM最終版トランスクリプト：話者名のレコード単位編集 ──────────────
++@app.patch('/api/projects/{project_id}/merged/speaker')
++async def update_merged_speaker(project_id: str, request: Request,
++                                _: str = Depends(require_admin)):
++    """LLM最終版トランスクリプトの指定行の話者名を更新する。
++    body: {"row_idx": int, "speaker": str}
++    """
++    body = await request.json()
++    row_idx = body.get('row_idx')
++    new_speaker = (body.get('speaker') or '').strip()
++    if not isinstance(row_idx, int) or row_idx < 0:
++        raise HTTPException(400, 'row_idx required (non-negative int)')
++    if not new_speaker:
++        raise HTTPException(400, 'speaker required (non-empty)')
++
++    conn = get_conn()
++    merged = conn.execute(
++        'SELECT id, result_json FROM merged_transcripts '
++        'WHERE project_id=? ORDER BY id DESC LIMIT 1',
++        (project_id,),
++    ).fetchone()
++    if not merged:
++        conn.close()
++        raise HTTPException(404, 'merged transcript not found')
++
++    try:
++        rows = json.loads(merged['result_json']) if merged['result_json'] else []
++    except Exception:
++        conn.close()
++        raise HTTPException(500, 'result_json parse error')
++
++    if row_idx >= len(rows):
++        conn.close()
++        raise HTTPException(400, f'row_idx out of range: {row_idx} >= {len(rows)}')
++
++    old_speaker = rows[row_idx].get('speaker', '')
++    rows[row_idx]['speaker'] = new_speaker
++    txt = rows[row_idx].get('text', '')
++    if isinstance(txt, str) and '【要確認:話者】' in txt:
++        rows[row_idx]['text'] = txt.replace('【要確認:話者】', '').rstrip()
++
++    conn.execute(
++        'UPDATE merged_transcripts SET result_json=? WHERE id=?',
++        (json.dumps(rows, ensure_ascii=False), merged['id']),
++    )
++    conn.commit()
++    conn.close()
++    logger.info(
++        f'merged speaker update: project={project_id} row={row_idx} '
++        f'{old_speaker!r} -> {new_speaker!r}'
++    )
++    return {'ok': True, 'row_idx': row_idx,
++            'old_speaker': old_speaker, 'new_speaker': new_speaker}
++
++
+ # ── Excel エクスポート（管理画面のタイムライン4カラムビューをそのまま書出） ──
+ @app.post('/api/projects/{project_id}/export.xlsx')
+ async def export_project_xlsx(project_id: str, request: Request,
+-- 
+2.43.0
+

@@ -144,11 +144,15 @@ def init_db():
         'cluster_window_ms':    '2000',
         'orphan_sim_threshold': '0.4',
         'backbone_algo':        'fixed',
-        'backbone_fixed':       'run1',
+        'backbone_fixed':       'run2',
         'default_model':        'gemini-2.5-flash',
         'parallel':             '3',
         'max_tokens_per_chunk': '8192',
         'retry_per_chunk':      '1',
+        'speaker_priority':     'deepgram',
+        'default_w_ws':         '0',
+        'default_w_run1':       '7',
+        'default_w_run2':       '3',
     }
     for k, v in _defaults.items():
         try:
