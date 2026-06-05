@@ -5,7 +5,7 @@ from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI, UploadFile, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import httpx, secrets
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -1410,6 +1410,120 @@ async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
     conn.close()
     logger.info(f'summarize OK summary_len={len(summary)} tasks={len(tasks)}')
     return {'ok': True, 'summary': summary, 'tasks': tasks}
+
+
+# ── Excel エクスポート（LLM最終版） ────────────────
+@app.get('/api/projects/{project_id}/export.xlsx')
+def export_project_xlsx(project_id: str, _: str = Depends(require_admin)):
+    from io import BytesIO
+    from urllib.parse import quote
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    conn = get_conn()
+    proj = conn.execute('SELECT id,name,created_at FROM projects WHERE id=?', (project_id,)).fetchone()
+    if not proj:
+        conn.close()
+        raise HTTPException(404, 'project not found')
+    merged = conn.execute(
+        'SELECT * FROM merged_transcripts WHERE project_id=? ORDER BY id DESC LIMIT 1',
+        (project_id,)
+    ).fetchone()
+    conn.close()
+    if not merged:
+        raise HTTPException(404, 'LLM最終版未生成')
+
+    result  = json.loads(merged['result_json']) if merged['result_json'] else []
+    notes   = json.loads(merged['notes_json'])  if merged['notes_json']  else []
+    tasks   = json.loads(merged['tasks_json'])  if merged['tasks_json']  else []
+    summary = merged['summary'] or ''
+
+    wb = Workbook()
+
+    # === Transcript シート ===
+    ws = wb.active
+    ws.title = 'Transcript'
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='4B0082')
+    headers = ['#', 'ts', '話者', '最終テキスト', '備考(note)', 'WS候補', 'Run1候補', 'Run2候補']
+    ws.append(headers)
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+    for i, seg in enumerate(result, 1):
+        src = seg.get('sources') or {}
+        ws.append([
+            i,
+            seg.get('ts', ''),
+            seg.get('speaker', ''),
+            seg.get('text', ''),
+            seg.get('note') or '',
+            src.get('Web Speech', ''),
+            src.get('Run1', ''),
+            src.get('Run2', ''),
+        ])
+    # 列幅
+    widths = [5, 8, 14, 60, 30, 40, 40, 40]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    # テキスト列は折返し
+    for row in ws.iter_rows(min_row=2, max_col=8):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+    ws.freeze_panes = 'A2'
+
+    # === Summary シート ===
+    if summary:
+        ws2 = wb.create_sheet('Summary')
+        ws2.column_dimensions['A'].width = 100
+        ws2.cell(row=1, column=1, value=summary).alignment = Alignment(wrap_text=True, vertical='top')
+
+    # === Tasks シート ===
+    ws3 = wb.create_sheet('Tasks')
+    ws3.append(['#', '内容'])
+    for col_idx in (1, 2):
+        c = ws3.cell(row=1, column=col_idx)
+        c.font = header_font; c.fill = header_fill
+        c.alignment = Alignment(horizontal='center')
+    for i, t in enumerate(tasks, 1):
+        ws3.append([i, str(t)])
+    ws3.column_dimensions['A'].width = 5
+    ws3.column_dimensions['B'].width = 80
+    for row in ws3.iter_rows(min_row=2, max_col=2):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+    # === Issues シート（要確認） ===
+    ws4 = wb.create_sheet('Issues')
+    ws4.append(['ts', '話者', 'note'])
+    for col_idx in (1, 2, 3):
+        c = ws4.cell(row=1, column=col_idx)
+        c.font = header_font; c.fill = header_fill
+        c.alignment = Alignment(horizontal='center')
+    for n in notes:
+        ws4.append([n.get('ts', ''), n.get('speaker', ''), n.get('note', '')])
+    ws4.column_dimensions['A'].width = 8
+    ws4.column_dimensions['B'].width = 14
+    ws4.column_dimensions['C'].width = 40
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    # ファイル名（日本語対応 RFC5987）
+    safe_name = re.sub(r'[\\/:*?"<>|]', '_', (proj['name'] or 'meeting'))[:80]
+    ts = datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d-%H%M')
+    fname = f'{safe_name}_{ts}.xlsx'
+    cd = f"attachment; filename=\"export.xlsx\"; filename*=UTF-8''{quote(fname)}"
+
+    return Response(
+        content=buf.getvalue(),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': cd}
+    )
 
 
 # ── Q&A（文字起こしへの質問） ─────────────────────

@@ -598,7 +598,10 @@ body.modal-open{overflow:hidden}
 
       <!-- ★ LLM最終版 -->
       <div id="merged-section" style="display:none">
-        <h3>★ LLM最終版トランスクリプト <span id="merged-model" style="font-size:12px;font-weight:400;color:var(--sub)"></span></h3>
+        <h3 style="display:flex;align-items:center;gap:8px">★ LLM最終版トランスクリプト
+          <span id="merged-model" style="font-size:12px;font-weight:400;color:var(--sub)"></span>
+          <button id="btn-export-xlsx" type="button" style="margin-left:auto;font-size:12px;padding:6px 12px;background:#4B0082;color:#fff;border:0;border-radius:6px;cursor:pointer;font-weight:700">★ Excel ダウンロード</button>
+        </h3>
         <div id="merged-body"></div>
         <div id="notes-summary" style="display:none">
           <h4>⚠ 要確認リスト</h4>
@@ -1074,6 +1077,35 @@ function renderMerged(p) {
   if (!p.merged) { section.style.display = 'none'; return; }
   section.style.display = 'block';
   document.getElementById('merged-model').textContent = `[${p.merged.model}]`;
+
+  const btnExport = document.getElementById('btn-export-xlsx');
+  btnExport.onclick = async () => {
+    btnExport.disabled = true;
+    const orig = btnExport.textContent;
+    btnExport.textContent = 'DL中…';
+    try {
+      const r = await fetch(`${API}/api/projects/${p.id}/export.xlsx`, {
+        headers: {'Authorization': authHeader}
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const blob = await r.blob();
+      // Content-Disposition から filename* を抽出
+      const cd = r.headers.get('content-disposition') || '';
+      let fname = `${p.name || 'meeting'}.xlsx`;
+      const m = cd.match(/filename\*=UTF-8''([^;]+)/i);
+      if (m) { try { fname = decodeURIComponent(m[1]); } catch(_){} }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('ダウンロード失敗: ' + e.message);
+    } finally {
+      btnExport.disabled = false;
+      btnExport.textContent = orig;
+    }
+  };
 
   const body = document.getElementById('merged-body');
   body.innerHTML = '';
