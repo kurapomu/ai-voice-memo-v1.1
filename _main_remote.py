@@ -908,17 +908,24 @@ MERGE_SETTINGS_RANGES = {
     'parallel':             (int,   1, 5),
     'max_tokens_per_chunk': (int,   4096, 16384),
     'retry_per_chunk':      (int,   0, 3),
+    'default_w_ws':         (int,   0, 10),
+    'default_w_run1':       (int,   0, 10),
+    'default_w_run2':       (int,   0, 10),
 }
 MERGE_SETTINGS_DEFAULTS = {
     'chunk_size':           25,
     'cluster_window_ms':    2000,
     'orphan_sim_threshold': 0.4,
     'backbone_algo':        'fixed',
-    'backbone_fixed':       'run1',
+    'backbone_fixed':       'run2',
     'default_model':        'gemini-2.5-flash',
     'parallel':             3,
     'max_tokens_per_chunk': 8192,
     'retry_per_chunk':      1,
+    'speaker_priority':     'deepgram',
+    'default_w_ws':         0,
+    'default_w_run1':       7,
+    'default_w_run2':       3,
 }
 
 
@@ -965,6 +972,8 @@ def _clamp_merge_settings(d: dict) -> dict:
             out[k] = v if v in ('rows_x_log_chars', 'rows_only', 'chars_only', 'fixed') else default
         elif k == 'backbone_fixed':
             out[k] = v if v in ('', 'ws', 'run1', 'run2') else ''
+        elif k == 'speaker_priority':
+            out[k] = v if v in ('deepgram', 'ws', 'hybrid') else default
         elif k == 'default_model':
             out[k] = v if v in ALLOWED_MODELS else default
         else:
@@ -1115,19 +1124,62 @@ def _build_rows_with_orphans(backbone_key: str, backbone_items: list,
     return rows
 
 
-def _resolve_speaker_for_row(ms, sp_events_sorted, ws_items, name_map):
-    near = [e for e in sp_events_sorted if abs(e['ms'] - ms) <= 2000]
-    if near:
-        best = min(near, key=lambda e: abs(e['ms'] - ms))
-        return (best['speaker_name'] or '未設定', False)
-    prior = [e for e in sp_events_sorted if e['ms'] <= ms]
-    if prior:
-        return (prior[-1]['speaker_name'] or '未設定', False)
-    if ws_items:
-        nearest_ws = min(ws_items, key=lambda x: abs(x['ms'] - ms))
-        if abs(nearest_ws['ms'] - ms) <= 4000 and nearest_ws['speaker_idx'] is not None:
-            return (name_map.get(nearest_ws['speaker_idx'], '未設定'), False)
-    return ('未設定', True)
+def _dg_speaker_at(ms, run2_items, name_map, window_ms=3000):
+    """Run2 (Deepgram) の最近傍 utterance から話者を解決。
+    speaker は 'A'/'B'/... または 0/1/2 を想定。
+    name_map (参加者 idx→名前) があれば優先マッピング、なければ 'Speaker X' 返却。"""
+    if not run2_items:
+        return None
+    nearest = min(run2_items, key=lambda x: abs(x['ms'] - ms))
+    if abs(nearest['ms'] - ms) > window_ms:
+        return None
+    spk = nearest.get('speaker')
+    if spk is None or spk == '':
+        return None
+    try:
+        if isinstance(spk, str) and len(spk) == 1 and spk.upper().isalpha():
+            idx = ord(spk.upper()) - ord('A')
+        else:
+            idx = int(spk)
+        if idx in name_map:
+            return name_map[idx]
+        return f'Speaker {spk}'
+    except Exception:
+        return f'Speaker {spk}'
+
+
+def _resolve_speaker_for_row(ms, sp_events_sorted, ws_items, name_map,
+                              run2_items=None, priority='ws'):
+    """priority: 'deepgram' / 'ws' / 'hybrid'。run2_items は Phase 2 で集めた Run2 utterance 群。"""
+    def _ws_resolve():
+        near = [e for e in sp_events_sorted if abs(e['ms'] - ms) <= 2000]
+        if near:
+            best = min(near, key=lambda e: abs(e['ms'] - ms))
+            return (best['speaker_name'] or '未設定', False)
+        prior = [e for e in sp_events_sorted if e['ms'] <= ms]
+        if prior:
+            return (prior[-1]['speaker_name'] or '未設定', False)
+        if ws_items:
+            nearest_ws = min(ws_items, key=lambda x: abs(x['ms'] - ms))
+            if abs(nearest_ws['ms'] - ms) <= 4000 and nearest_ws['speaker_idx'] is not None:
+                return (name_map.get(nearest_ws['speaker_idx'], '未設定'), False)
+        return ('未設定', True)
+
+    if priority == 'deepgram':
+        dg = _dg_speaker_at(ms, run2_items, name_map)
+        if dg:
+            return (dg, False)
+        return _ws_resolve()
+    if priority == 'hybrid':
+        near = [e for e in sp_events_sorted if abs(e['ms'] - ms) <= 2000]
+        if near:
+            best = min(near, key=lambda e: abs(e['ms'] - ms))
+            return (best['speaker_name'] or '未設定', False)
+        dg = _dg_speaker_at(ms, run2_items, name_map)
+        if dg:
+            return (dg, False)
+        return _ws_resolve()
+    return _ws_resolve()
 
 
 def _chunk_rows(rows: list, size: int, ctx: int = 2):
@@ -1235,6 +1287,13 @@ def _build_chunk_prompt(chunk: dict, plist: str, w_ws: int, w_run1: int, w_run2:
         '- 候補テキストに存在しない語句の新規生成\n'
         '- 主軸テキストの意味を変える書換え\n'
         '\n'
+        '## テキスト本文の優先採用ルール（重要）\n'
+        '- 主軸（多くの場合 Run2 / Deepgram）はレコード分離（行の切れ目）と話者の正確性のために選定されています。\n'
+        '- ただしテキスト本文の精度は Run1（Whisper）が高い場合が多いです。\n'
+        '- 同じ発話に Run1 候補が存在する場合、テキスト本文は Run1 を最優先で採用してください。\n'
+        '- Run2 のテキストは「Run1 候補がない箇所の補完」「Run1 と意味が一致する整合確認」のみに使ってください。\n'
+        '- ただし行の構造（行数・順序・ts・話者）は主軸を絶対遵守し、変更してはなりません。\n'
+        '\n'
         '判断に迷う場合は主軸テキストをそのまま返してください。誠実さが速度より大切です。'
     )
 
@@ -1293,14 +1352,21 @@ def _make_segment(row, text, note):
 @app.post('/api/projects/{project_id}/merge')
 async def merge_project(project_id: str,
                         model: str = '',
-                        w_ws: int = 1,
-                        w_run1: int = 7,
-                        w_run2: int = 2,
+                        w_ws: int = -1,
+                        w_run1: int = -1,
+                        w_run2: int = -1,
                         base: str = '',  # 後方互換用・未使用
                         _: str = Depends(require_admin)):
     settings = _get_merge_settings()
     if not model:
         model = settings['default_model']
+    # 重み未指定（-1）時は設定 default_w_* を使用
+    if w_ws < 0:
+        w_ws = settings.get('default_w_ws', 0)
+    if w_run1 < 0:
+        w_run1 = settings.get('default_w_run1', 7)
+    if w_run2 < 0:
+        w_run2 = settings.get('default_w_run2', 3)
     if model not in ALLOWED_MODELS:
         raise HTTPException(400, f'model must be one of: {list(ALLOWED_MODELS.keys())}')
 
@@ -1433,7 +1499,9 @@ async def merge_project(project_id: str,
     sp_events_sorted = sorted(speaker_events, key=lambda e: e['ms'])
     for row in rows:
         sp_name, sp_uncertain = _resolve_speaker_for_row(
-            row['ms'], sp_events_sorted, ws_items, name_map
+            row['ms'], sp_events_sorted, ws_items, name_map,
+            run2_items=run_items[2],
+            priority=settings.get('speaker_priority', 'deepgram'),
         )
         row['speaker'] = sp_name
         row['sp_uncertain'] = sp_uncertain
@@ -2057,13 +2125,14 @@ async def _zoom_download_worker(pending_id: int, payload: dict, dl_token: str):
         conn.close()
 
 
-# ── Zoom 連携：Webhook 受信 ─────────────────────────
+# ── Zoom 連携：Webhook 受信（通知のみ・自動DLしない） ─────
 @app.post('/api/zoom/webhook')
 async def zoom_webhook(request: Request):
-    """Zoom Webhook 受信エンドポイント。
+    """Zoom Webhook 受信エンドポイント（通知のみ）。
 
     - `endpoint.url_validation`: 初期検証チャレンジに即時応答
-    - `recording.completed`: 署名検証 → zoom_pending 登録 → 非同期DL起動
+    - `recording.completed`: 署名検証 → zoom_pending(status='notified') を記録するのみ
+                            （自動DLしない。実際の取り込みは管理画面から明示実行）
     - その他イベント: 無視
     """
     body = await request.body()
@@ -2090,43 +2159,31 @@ async def zoom_webhook(request: Request):
         logger.info(f"zoom webhook: ignored event={data.get('event')}")
         return {'status': 'ignored'}
 
-    payload  = data.get('payload', {}).get('object', {})
-    # download_token は payload 直下 or ペイロード内（Zoom API バージョンで揺れる）
-    dl_token = data.get('download_token') \
-               or data.get('payload', {}).get('download_token', '')
-
+    payload = data.get('payload', {}).get('object', {})
     uuid_ = payload.get('uuid', '')
+
+    # 通知のみ記録（DLしない。download_token は時間切れになる前提で保存しない）
     conn = get_conn()
     try:
-        cur = conn.execute("""
+        conn.execute("""
             INSERT INTO zoom_pending
-            (zoom_meeting_id, zoom_uuid, topic, host_email, start_time,
-             duration, participants_json, download_token, status, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+              (zoom_meeting_id, zoom_uuid, topic, host_email, start_time,
+               duration, status, created_at)
+            VALUES (?,?,?,?,?,?,'notified',?)
         """, (
             str(payload.get('id', '')), uuid_,
             payload.get('topic', ''), payload.get('host_email', ''),
             payload.get('start_time', ''), int(payload.get('duration', 0)),
-            json.dumps(payload.get('recording_files', []), ensure_ascii=False),
-            dl_token, 'pending_download',
             datetime.now(timezone.utc).isoformat(),
         ))
         conn.commit()
-        pending_id = cur.lastrowid
+        logger.info(f'zoom webhook: notified uuid={uuid_} topic={payload.get("topic","")}')
     except Exception as e:
         # UNIQUE 違反（同じ MTG の重複 Webhook）は握りつぶす
         logger.info(f'zoom webhook: duplicate uuid {uuid_} ({e})')
+    finally:
         conn.close()
-        return {'status': 'duplicate'}
-    conn.close()
-
-    if zoom_client is None:
-        logger.error('zoom webhook: ZOOM_* env vars not configured')
-        raise HTTPException(503, 'zoom integration not configured')
-
-    # バックグラウンドでDL開始
-    asyncio.create_task(_zoom_download_worker(pending_id, payload, dl_token))
-    return {'status': 'accepted', 'pending_id': pending_id}
+    return {'status': 'notified'}
 
 
 # ── Zoom 連携：取り込み待ち一覧 ─────────────────────
@@ -2155,13 +2212,101 @@ async def zoom_pending_list(_: str = Depends(require_admin)):
     return {'pending': out}
 
 
-# ── Zoom 連携：取り込み実行（projects 作成・音声ファイル配置） ─────
-@app.post('/api/zoom/pending/{pending_id}/import')
-async def zoom_import(pending_id: int, _: str = Depends(require_admin)):
-    """zoom_pending → projects/recordings/participants 化する。
+# ── Zoom 連携：Zoom Cloud 録画一覧（API + Webhook通知マージ） ─────
+@app.get('/api/zoom/cloud-recordings')
+async def zoom_cloud_recordings(days: int = 30, _: str = Depends(require_admin)):
+    """Zoom Cloud の録画一覧と zoom_pending(notified等) をマージして返す。
 
-    STT 実行は本 API では行わない。管理画面の既存 Run 設定モーダルから
-    POST /api/projects/{id}/analyze を呼ぶ運用とする（疎結合維持）。
+    - Zoom API 由来: 取り込み可能（recording_files が取れる）
+    - Webhook 通知のみ（Zoom API に無い）: 削除済の可能性。表示はするが取り込み不可
+    マージキー: zoom_uuid
+    """
+    if zoom_client is None:
+        raise HTTPException(503, 'zoom integration not configured')
+
+    # Zoom API（自アカウントの録画のみ）
+    tok = await zoom_client.get_access_token()
+    from_date = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)))).strftime('%Y-%m-%d')
+    zoom_meetings: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as cli:
+            r = await cli.get(
+                'https://api.zoom.us/v2/users/me/recordings',
+                headers={'Authorization': f'Bearer {tok}'},
+                params={'page_size': 30, 'from': from_date},
+            )
+            r.raise_for_status()
+            zoom_meetings = r.json().get('meetings', [])
+    except Exception as e:
+        logger.exception(f'zoom cloud-recordings: API fetch failed: {e}')
+        raise HTTPException(502, f'Zoom API error: {e}')
+
+    # zoom_pending（webhook 通知ログ・取り込み済を含む）
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT zoom_uuid, status, imported_project_id, error_message,
+               created_at, topic, start_time, host_email
+          FROM zoom_pending
+    """).fetchall()
+    conn.close()
+    pending_by_uuid = {r['zoom_uuid']: dict(r) for r in rows}
+
+    out = []
+    seen_uuids = set()
+    for m in zoom_meetings:
+        u = m.get('uuid', '')
+        seen_uuids.add(u)
+        local = pending_by_uuid.get(u, {})
+        files = m.get('recording_files', [])
+        p_audio = [f for f in files
+                   if f.get('recording_type') == 'participant_audio'
+                   or f.get('participant_email')]
+        out.append({
+            'source': 'zoom_api',
+            'uuid': u,
+            'meeting_id': m.get('id'),
+            'topic': m.get('topic'),
+            'host_email': m.get('host_email'),
+            'start_time': m.get('start_time'),
+            'duration_min': m.get('duration'),
+            'file_count': len(files),
+            'participant_audio_count': len(p_audio),
+            'has_participant_audio': len(p_audio) > 0,
+            'status': local.get('status') or 'available',
+            'imported_project_id': local.get('imported_project_id'),
+            'webhook_notified_at': local.get('created_at'),
+        })
+
+    # Zoom API に無いが webhook 通知だけある（= Zoom側で削除済の可能性）
+    for u, local in pending_by_uuid.items():
+        if u in seen_uuids:
+            continue
+        out.append({
+            'source': 'webhook_only',
+            'uuid': u,
+            'meeting_id': None,
+            'topic': local.get('topic'),
+            'host_email': local.get('host_email'),
+            'start_time': local.get('start_time'),
+            'duration_min': None,
+            'file_count': 0,
+            'participant_audio_count': 0,
+            'has_participant_audio': False,
+            'status': local.get('status'),
+            'imported_project_id': local.get('imported_project_id'),
+            'webhook_notified_at': local.get('created_at'),
+            'note': 'Zoom側に録画が見つかりません（削除済の可能性）',
+        })
+
+    out.sort(key=lambda x: (x.get('start_time') or x.get('webhook_notified_at') or ''), reverse=True)
+    return {'recordings': out, 'from_date': from_date, 'days': days}
+
+
+# ── Zoom 連携：zoom_pending → projects 変換（内部関数） ─────
+def _zoom_pending_to_project(pending_id: int) -> dict:
+    """zoom_pending(status='ready') → projects/recordings/participants 化する。
+
+    STT 実行は行わない。呼び出し元エンドポイントの責務。
     """
     conn = get_conn()
     row = conn.execute(
@@ -2229,6 +2374,117 @@ async def zoom_import(pending_id: int, _: str = Depends(require_admin)):
         'recordings': len(rec_ids),
         'name': project_name,
     }
+
+
+# ── Zoom 連携：取り込み実行（旧フロー・後方互換） ─────
+@app.post('/api/zoom/pending/{pending_id}/import')
+async def zoom_import(pending_id: int, _: str = Depends(require_admin)):
+    """旧フロー（Webhook自動DL→ready→import）の互換エンドポイント。
+
+    新フローは POST /api/zoom/cloud-recordings/{uuid}/import を使用。
+    """
+    return _zoom_pending_to_project(pending_id)
+
+
+# ── Zoom 連携：Cloud 録画から取り込み（新フロー・1ステップ） ─────
+@app.post('/api/zoom/cloud-recordings/{uuid:path}/import')
+async def zoom_cloud_import(uuid: str, _: str = Depends(require_admin)):
+    """指定 UUID の Zoom 録画を Zoom Cloud から DL → projects 化（1ステップ）。
+
+    OAuth Bearer で DL するため Webhook の download_token は不要。
+    既に取り込み済の場合は 409 を返さず {ok:false, project_id} を返す。
+    """
+    if zoom_client is None:
+        raise HTTPException(503, 'zoom integration not configured')
+
+    # 1) 既存チェック（imported なら即返却）
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id, status, imported_project_id FROM zoom_pending WHERE zoom_uuid=?",
+        (uuid,),
+    ).fetchone()
+    if existing and existing['status'] == 'imported':
+        conn.close()
+        return {
+            'ok': False,
+            'message': 'already imported',
+            'project_id': existing['imported_project_id'],
+        }
+    conn.close()
+
+    # 2) Zoom API で録画情報を取得（UUID は / や = を含むため2重 URL エンコード）
+    import urllib.parse as _up
+    encoded = _up.quote(_up.quote(uuid, safe=''), safe='')
+    tok = await zoom_client.get_access_token()
+    try:
+        async with httpx.AsyncClient(timeout=30) as cli:
+            r = await cli.get(
+                f'https://api.zoom.us/v2/meetings/{encoded}/recordings',
+                headers={'Authorization': f'Bearer {tok}'},
+            )
+        if r.status_code != 200:
+            raise HTTPException(404, f'recording not found in Zoom: HTTP {r.status_code}')
+        meeting = r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f'zoom cloud-import: Zoom API fetch failed uuid={uuid}: {e}')
+        raise HTTPException(502, f'Zoom API error: {e}')
+
+    payload = {
+        'uuid': uuid,
+        'id': meeting.get('id'),
+        'topic': meeting.get('topic', ''),
+        'host_email': meeting.get('host_email', ''),
+        'start_time': meeting.get('start_time', ''),
+        'duration': int(meeting.get('duration', 0) or 0),
+        'recording_files': meeting.get('recording_files', []),
+    }
+
+    # 3) zoom_pending を upsert（pending_download 状態にしてDLへ）
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id FROM zoom_pending WHERE zoom_uuid=?",
+        (uuid,),
+    ).fetchone()
+    if existing:
+        pending_id = existing['id']
+        conn.execute(
+            "UPDATE zoom_pending SET status='pending_download', error_message=NULL WHERE id=?",
+            (pending_id,),
+        )
+    else:
+        cur = conn.execute("""
+            INSERT INTO zoom_pending
+              (zoom_meeting_id, zoom_uuid, topic, host_email, start_time,
+               duration, status, created_at)
+            VALUES (?,?,?,?,?,?,'pending_download',?)
+        """, (
+            str(payload['id']), uuid, payload['topic'],
+            payload['host_email'], payload['start_time'],
+            payload['duration'],
+            datetime.now(timezone.utc).isoformat(),
+        ))
+        pending_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    # 4) DL（OAuth Bearer 経路。dl_token=None で worker が OAuth に切り替え）
+    await _zoom_download_worker(pending_id, payload, dl_token=None)
+
+    # 5) DL 成否確認
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT status, error_message FROM zoom_pending WHERE id=?",
+        (pending_id,),
+    ).fetchone()
+    conn.close()
+    if row['status'] != 'ready':
+        raise HTTPException(500, f"download failed: {row['error_message']}")
+
+    # 6) projects 化
+    result = _zoom_pending_to_project(pending_id)
+    return {'ok': True, **result}
 
 
 # ── Zoom 連携：取り込み待ち破棄 ─────────────────────

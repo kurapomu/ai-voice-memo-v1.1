@@ -250,7 +250,8 @@
   <!-- 2. システム全体 -->
   <section id="system">
     <h2>2. システム全体構成図</h2>
-    <p>モバイルPWA・VPS・外部API・管理画面の4層構成。データは常にVPSのSQLiteと音声ストレージに集約される。</p>
+    <p>モバイルPWA・VPS・外部API・管理画面の4層に加え、Zoom Cloud Recording を OAuth で取り込む経路を持つ。データはすべて VPS の SQLite と音声ストレージに集約される。</p>
+    <p style="font-size:14px;color:var(--text-sub)">Zoom連携は <strong>Pull型一覧フロー</strong>：管理画面の「Zoom録画一覧」モーダルから明示的に1件ずつ取り込み。Webhook は通知記録のみで自動DL はしない。</p>
     <div class="mermaid">
 flowchart TB
   subgraph Mobile["① モバイル端末（iPhone / Safari PWA）"]
@@ -284,20 +285,30 @@ flowchart TB
     G[Google Gemini API<br/>gemini-2.5-flash / pro<br/>重み付き統合]
   end
 
+  subgraph Zoom["⑤ Zoom Cloud（オンラインMTG）"]
+    Z1[Zoom Cloud Recording<br/>参加者別音声 m4a]
+    Z2[Server-to-Server<br/>OAuth API]
+    Z1 --- Z2
+  end
+
   Mobile -- "multipart POST<br/>音声 + meta JSON" --> N
   F --> W
   F --> D
   F --> G
   G --> DB
+  Z2 -- "OAuth Bearer DL<br/>（管理画面から1件ずつ）" --> F
   ADM -- "Run1/Run2/Merge起動" --> F
+  ADM -- "Zoom録画一覧→取り込み" --> F
   ADM -- "4カラム比較表示" --> DB
 
   classDef mobile fill:#E6EDF8,stroke:#1F4FAA,color:#111
   classDef vps fill:#DCFCE7,stroke:#1D6B3A,color:#111
   classDef ext fill:#FEF3C7,stroke:#B45309,color:#111
+  classDef zoom fill:#E0F2FE,stroke:#0369A1,color:#111
   class M1,M2,M3,MX mobile
   class N,F,DB,AUD,ADM vps
   class W,D,G ext
+  class Z1,Z2 zoom
     </div>
   </section>
 

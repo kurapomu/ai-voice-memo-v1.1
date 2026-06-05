@@ -1,7 +1,106 @@
-# Zoom連携設計（v1）
+# Zoom連携設計（v1 → v2: Pull型一覧フロー）
 
-作成日: 2026-06-04
+作成日: 2026-06-04 / 改訂: 2026-06-05
 対象: AI Voice Memo（jizo-dev.com/ai-voice-memo）
+
+---
+
+## 【v2 改訂】 2026-06-05
+
+v1（Webhook自動DL方式）を運用してみたところ、**複数録画が並んだ際の不整合**（重複Webhook・DLタイミング差・Zoom側削除済との乖離）と、**ユーザー意思と無関係に資源消費**する点が問題となった。v2 で「Pull型一覧→1件ずつ取り込み」に再設計した。
+
+### v2 のデータフロー
+
+```
+[平時]
+Zoom Cloud → recording.completed Webhook
+  → /api/zoom/webhook（署名検証のみ）
+  → zoom_pending(status='notified') を INSERT するだけ
+    ※ ファイル DL は行わない
+
+[ユーザー操作]
+管理画面「☁ Zoom録画一覧から取り込み」ボタン
+  → GET /api/zoom/cloud-recordings?days=N
+      - Zoom API `/v2/users/me/recordings` をライブ取得
+      - zoom_pending（notified/imported/error）とマージ（key=zoom_uuid）
+      - status='available'（未取得）/ 'notified' / 'imported' / 'error' で表示
+  → モーダルに一覧表示。1件ずつ「取り込む」ボタン
+  → POST /api/zoom/cloud-recordings/{uuid:path}/import
+      - Zoom API `/v2/meetings/{uuid}/recordings` で録画情報を再取得
+      - zoom_pending を upsert（status='pending_download'）
+      - `_zoom_download_worker(pending_id, payload, dl_token=None)` で OAuth Bearer DL
+      - `_zoom_pending_to_project(pending_id)` で projects/recordings/participants 作成
+      - status='imported' + imported_project_id をセット
+      - 即 projects 一覧に表示
+```
+
+### v2 の保証
+
+- **ゼロ自動DL**: Webhook では DL しないため、不要録画でのディスク消費なし
+- **整合性**: Zoom API がライブで真実 = Zoom側の削除即時反映、過去録画も遡及表示可
+- **1ステップ取り込み**: 「取り込む」押下 → DL → projects 化が1回のAPI呼び出しで完結
+- **多重 import 防止**: `zoom_uuid UNIQUE` + status チェックで再取り込みを拒否
+
+### v2 の API（新規）
+
+| メソッド | パス | 認証 | 用途 |
+|---|---|---|---|
+| GET | `/api/zoom/cloud-recordings?days=N` | Basic | Zoom API + zoom_pending マージ一覧（過去N日） |
+| POST | `/api/zoom/cloud-recordings/{uuid:path}/import` | Basic | UUIDの録画を DL → projects 化（1ステップ） |
+
+v1 の `/api/zoom/pending`, `/api/zoom/pending/{id}/import`, `/api/zoom/pending/{id}` は**互換のため残存**（旧テストデータ向け）。
+
+### v2 の Webhook 動作
+
+```python
+@app.post('/api/zoom/webhook')
+async def zoom_webhook(request: Request):
+    # 署名検証 / URL Validation Challenge はそのまま
+    # ↓ v1 と異なる点
+    # recording.completed の場合:
+    #   zoom_pending(status='notified') を INSERT のみ
+    #   _zoom_download_worker は呼ばない
+    return {'status': 'notified'}
+```
+
+Marketplace 側の Event Subscription は**残して可**（来ても DB に記録するだけで害なし。ユーザーへの「新着あり」気付きトリガーとして機能）。
+
+### v2 の管理画面 UI
+
+サイドバー上部に2ボタン構成:
+- **「☁ Zoom録画一覧から取り込み」（青）** — v2 新フロー（自アカウント主催）
+- **「他組織MTGをファイルアップロード」（グレー）** — 既存（外部主催）
+
+モーダル「Zoom Cloud 録画一覧」:
+- 期間選択（7日/30日/90日/180日、デフォルト30日）
+- 各行: トピック / 開始時刻 / 時間 / ファイル数 / 話者別音声有無 / ステータスバッジ / アクション
+- ステータスバッジ色:
+  - `available`: グレー「未取得」
+  - `notified`: 青「Webhook通知済」
+  - `imported`: 緑「取り込み済」+「プロジェクトを開く」
+  - `error`: 赤「エラー」+「再試行」
+
+### v2 の制約（v1から継承）
+
+- **自アカウント主催の録画のみ取得可**（Server-to-Server OAuth の仕様上、他組織主催の録画は API で取れない）
+- 外部主催 MTG は「他組織MTGをファイルアップロード」モーダルで対応
+- ホストの Zoom アカウント設定で「Record a separate audio file for each participant」が ON でないと話者別音声が生成されない（1人テストでは participant_audio が空になる）
+
+### v2 の Zoom Marketplace 必須 Scope（実機検証済）
+
+```
+recording:read:admin                                ← 基本
+cloud_recording:read:list_user_recordings:admin     ← 必須（v1には記載なし、運用で判明）
+cloud_recording:read:recording:admin                ← 必須
+meeting:read:meeting:admin                          ← 推奨
+user:read:user:admin                                ← 推奨
+```
+
+`:master` 系 Scope は不要（Master Account 契約していない単一組織運用のため）。
+
+---
+
+## 【v1 原典】（履歴・参考用に保持）
 
 ## 目的
 

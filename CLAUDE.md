@@ -62,12 +62,12 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 ### ローカル（このディレクトリ）
 - `index.html` — モバイルPWA全体（VanillaJS・約1000行）※**正典：これを編集→VPSへscp**
 - `manifest.json` — PWAマニフェスト
-- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョン定数 `const CACHE = 'voicememo-vX.Y';`（**現在は `voicememo-v2.7`**、編集後は必ずインクリメント）
-- `CONCEPT.md` — プロダクト哲学・全体構成の図解ドキュメント（人間向け補足。CLAUDE.mdより詳細な背景）
-- `docs/system-overview.html` — システム概要のHTML版（社外説明用）
-- `docs/superpowers/plans/` — 中長期実装プランの置き場（`YYYY-MM-DD-トピック.md` 形式）
-- `docs/superpowers/specs/` — 設計仕様書の置き場（`YYYY-MM-DD-トピック.md` 形式）
-- `_main_remote.py` / `_admin_remote.html` / `_db_remote.py` — **ローカル正典（編集可・scpデプロイ正規ルート）**。これらを編集 → VPS の `/opt/jizo-api/main.py` / `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` / `/opt/jizo-api/db.py` へ scp → 必要に応じ `systemctl restart jizo-api`
+- `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョンは `sw.js` 冒頭の `const CACHE = 'voicememo-vX.Y';` を直接確認。**編集時は必ず +0.1 インクリメント**
+- `CONCEPT.md` — 人間向け：プロダクト哲学・背景（Claude は通常参照不要）
+- `docs/system-overview.html` — 社外説明用 HTML
+- `docs/superpowers/plans/` — 中長期実装プラン（`YYYY-MM-DD-トピック.md`）
+- `docs/superpowers/specs/` — **設計仕様の正典**（`YYYY-MM-DD-トピック.md`）。CLAUDE.md より詳細な実装ロジックはここを参照
+- `_main_remote.py` / `_admin_remote.html` / `_db_remote.py` — **ローカル正典（編集可・コミット対象）**。編集 → VPS の `/opt/jizo-api/main.py` / `/var/www/jizo-dev.com/ai-voice-memo/admin/index.html` / `/opt/jizo-api/db.py` へ scp → 必要に応じ `systemctl restart jizo-api`
 
 ### VPS（`root@162.43.14.31`）
 - `/var/www/jizo-dev.com/ai-voice-memo/index.html` — モバイルPWA（↑のコピー）
@@ -81,9 +81,13 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 
 ## よく使うコマンド
 
-### デプロイ（MacBook 前提）
+### デプロイ
 
-作業ディレクトリ：`/Users/tkurata/Desktop/ai-voice-memo-v1-2/ai-voice-memo-v1.1/`
+作業ディレクトリ：
+- Windows: `D:\voice`
+- Mac: `~/Desktop/ai-voice-memo-v1-2/ai-voice-memo-v1.1/`
+
+`scp` / `ssh` は Git Bash（Windows）・標準ターミナル（Mac）どちらでも同一コマンドで動作。
 
 ```bash
 # モバイルアプリ更新（index.html）
@@ -186,49 +190,27 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - Run2: `language=None` + `prompt`（参加者名＋カタカナ固有名詞をヒント）
 - 同期API＝即`completed`で保存。`aai_id` プレフィクスは `whisper:` で識別
 
-### LLM統合（ゼロ欠落・時系列整流アーキテクチャ：5フェーズ新設計）
-2026-06-05 改修。旧「重み最大ソース骨組み + LLMが全行を整流」設計の3欠陥（出力トークン truncation・LLM 指示不遵守・検証不在）を、決定論的行構成 + LLM テキスト整流 + チャンク分割 + 強制整合に再設計。詳細は `docs/superpowers/specs/2026-06-05-llm-merge-redesign-design.md`。
+### LLM統合（ゼロ欠落・時系列整流アーキテクチャ：5フェーズ）
+2026-06-05 改修。**詳細仕様の正典：`docs/superpowers/specs/2026-06-05-llm-merge-redesign-design.md`**。実装ロジック変更時は必ず spec を参照。
 
-**設計の3保証**
-- **ゼロ欠落**: 主軸全行 + オーファン挿入された他ソース独自発話を必ず含む
-- **時系列順**: 主軸1本で時系列が混線しない、LLM は行自体の順番を変えられない
-- **LLM 障害でも結果が返る**: チャンクごとの LLM 失敗時はそのチャンクを主軸生テキストで埋める
+**3保証**
+- **ゼロ欠落**: 主軸全行 + 他ソース独自発話（オーファン）を必ず含む
+- **時系列順**: 主軸1本で時系列が混線しない、LLM は行順を変えられない
+- **LLM 障害耐性**: チャンクごとに失敗時は主軸生テキストで埋める
 
-**Phase 1: 主軸選定（決定論的）**
-- 完了済ソース（WS / Run1 / Run2）から最大量1本を選定
-- デフォルト選定スコア: `rows × log(total_chars + 1)`
-- 設定可能アルゴリズム: `rows_x_log_chars` / `rows_only` / `chars_only` / `fixed`
-- 実装: `_select_backbone(ws_items, run1_items, run2_items, algo, fixed)`
+**5フェーズ概要**
+1. **主軸選定（決定論）** — 完了済ソースから最大量1本を選ぶ（`_select_backbone`）。**新デフォルト: `backbone_fixed=run2`（Deepgram主軸＝レコード分離・話者を優先）**
+2. **行構築** — 主軸 + 他ソースを ±`cluster_window_ms` で添付、窓外+低類似度はオーファンとして時系列挿入。ここで行数確定（`_build_rows_with_orphans`）
+3. **話者解決** — `speaker_priority`（`deepgram`/`ws`/`hybrid`）で分岐。**新デフォルト `deepgram`**: 行 ms 近傍の Run2 utterance speaker → 参加者idxマッピング（0=A,1=B,...）→ 未マップは「Speaker X」（`_resolve_speaker_for_row` + `_dg_speaker_at`）
+4. **チャンク分割 LLM 整流（並列）** — `chunk_size` 行ずつ JSONL 出力。LLM は補完・順序修正・句読点整形のみ可、行追加/削除/並べ替えは禁止。プロンプトに「**テキスト本文は Run1（Whisper）候補を最優先採用、Run2 はレコード分離・話者用途**」を明示。重み運用デフォルト **0:7:3**
+5. **強制整合（決定論）** — チャンク失敗 or 行数不一致 → 主軸直採用。候補に無い 4文字以上連続部分文字列を幻覚として上書き＋`note='要確認:幻覚検出'`
 
-**Phase 2: 行構築（主軸 + オーファン）**
-- 主軸の各行に他2ソースの最近傍候補を ±`cluster_window_ms`（デフォルト2000ms）窓で添付
-- 主軸どの行とも窓外、かつ広域 ±window×3 で類似度 < `orphan_sim_threshold`（デフォルト0.4）の他ソース発話はオーファンとして時系列挿入
-- 同一ソース内、500ms 以内の隣接オーファンを連結
-- 行数 (M + K) はここで確定、以降変動禁止
-- 実装: `_build_rows_with_orphans(...)`
+**役割分担（Run2 主軸化の意図）**
+- Run2 (Deepgram) → **レコード分離 + 話者分離**（タイムスタンプ・行の切れ目・Speaker A/B が正確）
+- Run1 (Whisper) → **テキスト本文の精度**（LLM が Run2 行枠内に Run1 テキストを充当）
+- 旧仕様（Run1 主軸 + WS 押下話者）は設定画面で `backbone_fixed=run1`, `speaker_priority=ws`, 重み `1:7:2` に戻せる
 
-**Phase 3: 話者解決（既存ロジック流用）**
-- 優先度チェーン: 押下±2秒 → 直前押下継承 → WS speaker_idx ±4秒 → 「未設定」
-- 「未設定」行は最終テキスト末尾に `【要確認:話者】` 付記
-- 実装: `_resolve_speaker_for_row(ms, sp_events_sorted, ws_items, name_map)`
-
-**Phase 4: チャンク分割 LLM 整流（並列）**
-- 全行を `chunk_size`（デフォルト25）行ずつに分割、`asyncio.gather + Semaphore(parallel)` で最大3並列
-- 各チャンクに前後2行を「文脈（編集対象外）」として付与
-- LLM の仕事は厳格に3つのみ:
-  1. 主軸が拾い損ねた単語の補完
-  2. 主軸内で明らかに順序が崩れた語句の修正
-  3. 句読点・スペースの整形
-- 禁止: 行追加・削除・統合・分割・並べ替え、候補にない語句の新規生成、主軸意味の書換え
-- 出力形式: JSONL（1行=1JSON、truncation耐性が高い）
-- 重みスライダー（w_ws:w_run1:w_run2）は「同等候補から1つ選ぶ際の補完優先度ヒント」として LLM に渡す。**運用デフォルト 1:7:2**（Run1 主軸との整合）
-- 実装: `_chunk_rows / _call_gemini_chunk / _build_chunk_prompt / _parse_jsonl`
-
-**Phase 5: 強制整合（決定論的）**
-- チャンクごとに: LLM 失敗 or 行数不一致 → そのチャンクは主軸生テキスト直採用
-- 各行で候補に無い 4文字以上連続部分文字列を検出 → 幻覚と判定し主軸生テキストで上書き、`note='要確認:幻覚検出'`
-- 出力フィールド: `result_json = [{ts, speaker, text, note, sources?}]`（形状不変、Excel/Q&A/要約は無改修で動作）
-- 実装: `_detect_hallucination(text, candidates)` + `merge_project` 末尾
+**出力形式**: `result_json = [{ts, speaker, text, note, sources?}]`（形状不変・Excel/Q&A/要約は無改修対応）
 
 **設定パラメータ（`merge_settings` テーブル・設定画面から変更可）**
 | キー | デフォルト | 範囲 |
@@ -237,11 +219,15 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 | `cluster_window_ms` | 2000 | 500–5000 |
 | `orphan_sim_threshold` | 0.4 | 0.0–1.0 |
 | `backbone_algo` | `fixed`（運用デフォルト） | 4種：`fixed` / `rows_x_log_chars` / `rows_only` / `chars_only` |
-| `backbone_fixed` | `run1`（Whisper 主軸固定） | `''`/`ws`/`run1`/`run2` |
+| `backbone_fixed` | `run2`（Deepgram 主軸） | `''`/`ws`/`run1`/`run2` |
+| `speaker_priority` | `deepgram` | `deepgram`/`ws`/`hybrid` |
+| `default_w_ws` / `default_w_run1` / `default_w_run2` | 0 / 7 / 3 | 各 0–10 |
 | `default_model` | `gemini-2.5-flash` | ALLOWED_MODELS |
 | `parallel` | 3 | 1–5 |
 | `max_tokens_per_chunk` | 8192 | 4096–16384 |
 | `retry_per_chunk` | 1 | 0–3 |
+
+> **既存DBの注意**: `merge_settings` は INSERT OR IGNORE のため、本番DBでは旧 `backbone_fixed=run1` が残っている。新仕様を有効化するには管理画面「⚙ 設定 → LLM統合詳細設定」で固定主軸を `Run2` に、話者解決優先度を `Deepgram` に、既定重みを `0:7:3` に保存する。
 
 **設定 API**
 - `GET /api/settings/merge`（Basic 認証）— 現在の設定取得
@@ -279,8 +265,8 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - リポジトリ: `https://github.com/kurapomu/ai-voice-memo-v1.1`（mainブランチのみ運用）
 - **GitHub Pages は無効**。デプロイは VPS への scp が正のため、commit と本番反映は別操作
 - 編集 → ローカル動作確認 → VPS へ scp → `git add/commit/push`（履歴目的）の順
-- `_main_remote.py` / `_admin_remote.html` は本番取得スナップショットのため、原則コミットしない（.gitignore推奨）
-- 現状の `.gitignore` は `pics/` のみ。`_main_remote.py` / `_admin_remote.html` を `.gitignore` 追加するかは未決定（一時的にコミット履歴として残す運用も有）
+- `_main_remote.py` / `_admin_remote.html` / `_db_remote.py` は **ローカル正典としてコミット対象**（履歴管理）
+- 現状の `.gitignore` は `pics/` のみ
 
 ---
 
@@ -289,6 +275,7 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - VPS SSH: `ssh root@162.43.14.31`（鍵認証済み）
 - モバイルアプリ: `https://jizo-dev.com/ai-voice-memo/`
 - PC管理画面: `https://jizo-dev.com/ai-voice-memo/admin/`（ID: `test` / PW: `test`）
+- **管理画面 設定モーダル PIN: `5963`**（`⚙ 設定` ボタン押下時に要求。セッション中は再入力不要）
 - GitHubリポジトリ: `https://github.com/kurapomu/ai-voice-memo-v1.1`（mainブランチ）
 - GitHub Pages: **無効化済み**（VPSのみで運用）
 
@@ -308,8 +295,14 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - ✅ 録音20分自動pause・STT無反応バナー
 - ✅ ログシステム（12hローテーション・`/api/logs`で閲覧）
 
+- ✅ **Zoom連携（v2：Pull型一覧フロー）** — 2026-06-05 完成。Server-to-Server OAuth で自Zoomアカウント主催の Cloud Recording を取り込み。
+  - 管理画面の「☁ Zoom録画一覧から取り込み」モーダル → Zoom API live取得＋Webhook通知ログをマージ表示 → 1件ずつ「取り込む」→ DL→projects 化（1ステップ）
+  - Webhook (`recording.completed`) は **通知のみ記録**（自動DLしない）
+  - 主要 API: `GET /api/zoom/cloud-recordings?days=N` / `POST /api/zoom/cloud-recordings/{uuid:path}/import`
+  - 他組織主催MTGは「他組織MTGをファイルアップロード」モーダル（既存）で対応
+  - 設計仕様: `docs/superpowers/specs/2026-06-04-zoom-integration-design.md`
+
 ### 未着手（フェーズ3〜4）
-- ⬜ **Zoom連携（v1）** — 設計仕様: `docs/superpowers/specs/2026-06-04-zoom-integration-design.md` / 実装プラン: `docs/superpowers/plans/2026-06-04-zoom-integration.md`（未着手）
 - ⬜ Claude API での要約・ToDo抽出・Q&A（CLAUDE.mdガイドラインでHaiku優先想定）
 - ⬜ 用途別テンプレート（会議・インタビュー・講義）
 - ⬜ Presidio + GiNZA によるPII保護

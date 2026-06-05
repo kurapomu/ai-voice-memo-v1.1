@@ -330,20 +330,14 @@ body.modal-open{overflow:hidden}
         font-weight:700;text-decoration:none">＋ 新規MTGを録音</a>
     </div>
 
-    <!-- Zoom 取り込み待ちセクション（件数があるときだけ表示） -->
-    <div id="zoom-pending-section" style="display:none;padding:10px 12px;border-bottom:1px solid var(--border);background:rgba(56,189,248,0.06)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <h3 style="font-size:13px;font-weight:700;margin:0;color:var(--text)">
-          Zoom 取り込み待ち
-          <span id="zoom-badge" style="display:inline-block;background:var(--red);color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;margin-left:4px">0</span>
-        </h3>
-        <button onclick="loadZoomPending()" class="btn-ghost btn-sm" style="font-size:11px">更新</button>
-      </div>
-      <div id="zoom-pending-list" style="font-size:12px"></div>
+    <!-- Zoom 取り込みセクション -->
+    <div style="padding:10px 12px;border-bottom:1px solid var(--border);background:rgba(56,189,248,0.06);display:flex;flex-direction:column;gap:6px">
+      <button onclick="openZoomCloudModal()"
+        style="width:100%;padding:8px;background:var(--sky);color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer">
+        ☁ Zoom録画一覧から取り込み
+      </button>
       <button onclick="openZoomUploadModal()"
-        style="width:100%;margin-top:8px;padding:7px;background:var(--surface2);
-        border:1px solid var(--border);color:var(--text);border-radius:6px;
-        font-size:12px;cursor:pointer">
+        style="width:100%;padding:7px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;cursor:pointer">
         他組織MTGをファイルアップロード
       </button>
     </div>
@@ -379,6 +373,34 @@ body.modal-open{overflow:hidden}
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
           <button onclick="closeUploadModal()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 16px;font-size:14px;cursor:pointer">キャンセル</button>
           <button id="upload-submit" onclick="submitUpload()" style="background:#22c55e;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer">アップロード</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zoom Cloud 録画一覧モーダル（自アカウント主催のクラウド録画） -->
+    <div id="zoom-cloud-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center">
+      <div onclick="closeZoomCloudModal()" style="position:absolute;inset:0;background:rgba(0,0,0,.7)"></div>
+      <div style="position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(760px,94vw);max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;z-index:1">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <h3 style="font-size:16px;font-weight:700;margin:0">☁ Zoom Cloud 録画一覧</h3>
+          <button onclick="closeZoomCloudModal()" style="background:transparent;color:var(--text-sub);border:0;font-size:18px;cursor:pointer">×</button>
+        </div>
+        <div style="font-size:12px;color:var(--sub);line-height:1.5">
+          自Zoomアカウント主催のクラウド録画のみ表示されます。他組織主催のMTGは「他組織MTGをファイルアップロード」をご利用ください。
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;font-size:13px">
+          <label style="color:var(--sub)">期間:</label>
+          <select id="zoom-cloud-days" onchange="loadZoomCloud()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px">
+            <option value="7">過去7日</option>
+            <option value="30" selected>過去30日</option>
+            <option value="90">過去90日</option>
+            <option value="180">過去180日</option>
+          </select>
+          <button onclick="loadZoomCloud()" class="btn-ghost btn-sm" style="font-size:12px">🔄 更新</button>
+          <span id="zoom-cloud-status" style="margin-left:auto;font-size:12px;color:var(--sub)"></span>
+        </div>
+        <div id="zoom-cloud-list" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
+          <div style="text-align:center;padding:20px;color:var(--sub);font-size:13px">読み込み中…</div>
         </div>
       </div>
     </div>
@@ -498,10 +520,35 @@ body.modal-open{overflow:hidden}
               <label style="font-size:12px;color:var(--sub);font-weight:600">固定主軸</label>
               <select id="ms-backbone-fixed" style="width:100%;padding:6px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
                 <option value="">（自動）</option>
-                <option value="run1">Run1</option>
-                <option value="run2">Run2</option>
+                <option value="run1">Run1（Whisper）</option>
+                <option value="run2">Run2（Deepgram・推奨）</option>
                 <option value="ws">WebSpeech</option>
               </select>
+            </div>
+            <div class="run-field" style="margin-bottom:10px">
+              <label style="font-size:12px;color:var(--sub);font-weight:600">話者解決優先度</label>
+              <select id="ms-speaker-priority" style="width:100%;padding:6px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
+                <option value="deepgram">Deepgram 話者分離を最優先（推奨）</option>
+                <option value="ws">WS押下イベント最優先</option>
+                <option value="hybrid">WS押下±2秒 → Deepgram</option>
+              </select>
+              <div style="font-size:11px;color:var(--sub);margin-top:4px;line-height:1.4">
+                Deepgram の話者分離結果を行ごとに最近傍で参照。参加者名は idx 0=A, 1=B… でマッピング。
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+              <div class="run-field">
+                <label style="font-size:12px;color:var(--sub);font-weight:600">既定重み WS (0–10)</label>
+                <input id="ms-w-ws" type="number" min="0" max="10" step="1" style="width:100%;padding:6px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
+              </div>
+              <div class="run-field">
+                <label style="font-size:12px;color:var(--sub);font-weight:600">既定重み Run1 (0–10)</label>
+                <input id="ms-w-run1" type="number" min="0" max="10" step="1" style="width:100%;padding:6px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
+              </div>
+              <div class="run-field">
+                <label style="font-size:12px;color:var(--sub);font-weight:600">既定重み Run2 (0–10)</label>
+                <input id="ms-w-run2" type="number" min="0" max="10" step="1" style="width:100%;padding:6px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
+              </div>
             </div>
             <div class="run-field" style="margin-bottom:10px">
               <label style="font-size:12px;color:var(--sub);font-weight:600">デフォルトモデル</label>
@@ -785,84 +832,120 @@ document.getElementById('login-btn').addEventListener('click', tryLogin);
 document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
 if (authHeader) document.getElementById('login-overlay').classList.add('hidden');
 
-// ── Zoom 取り込み待ち ──
-async function loadZoomPending() {
-  const section = document.getElementById('zoom-pending-section');
-  const list    = document.getElementById('zoom-pending-list');
-  const badge   = document.getElementById('zoom-badge');
-  if (!section) return;
+// ── Zoom Cloud 録画一覧モーダル ──
+function openZoomCloudModal() {
+  document.getElementById('zoom-cloud-modal').style.display = 'flex';
+  loadZoomCloud();
+}
+function closeZoomCloudModal() {
+  document.getElementById('zoom-cloud-modal').style.display = 'none';
+}
+
+async function loadZoomCloud() {
+  const days = document.getElementById('zoom-cloud-days').value || '30';
+  const list = document.getElementById('zoom-cloud-list');
+  const status = document.getElementById('zoom-cloud-status');
+  list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--sub);font-size:13px">読み込み中…</div>';
+  status.textContent = '';
   try {
-    const res = await apiFetch('/api/zoom/pending');
+    const res = await apiFetch(`/api/zoom/cloud-recordings?days=${days}`);
     if (!res.ok) {
-      section.style.display = 'none';
+      const err = await res.text();
+      list.innerHTML = `<div style="color:var(--red);padding:12px;font-size:13px">取得失敗: ${escHtml(err)}</div>`;
       return;
     }
     const data = await res.json();
-    const items = data.pending || [];
+    const items = data.recordings || [];
+    status.textContent = `${items.length}件 (${data.from_date}〜)`;
     if (items.length === 0) {
-      section.style.display = 'none';
+      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--sub);font-size:13px">録画なし</div>';
       return;
     }
-    section.style.display = 'block';
-    badge.textContent = items.length;
-    list.innerHTML = items.map(it => {
-      const stLabel = ({
-        pending_download: 'DL中…',
-        ready:            '取り込み可',
-        error:            'エラー',
-      })[it.status] || it.status;
-      const stColor = it.status === 'error' ? 'var(--red)' :
-                      it.status === 'ready' ? 'var(--sky)' : 'var(--text-sub)';
-      const ts = it.start_time ? formatDate(it.start_time) : '';
-      const buttons = it.status === 'ready'
-        ? `<button onclick="importZoomPending(${it.id})" class="btn-sky btn-sm" style="font-size:11px;padding:3px 8px">取り込む</button>
-           <button onclick="deleteZoomPending(${it.id})" class="btn-ghost btn-sm" style="font-size:11px;padding:3px 8px;margin-left:4px">破棄</button>`
-        : `<button onclick="deleteZoomPending(${it.id})" class="btn-ghost btn-sm" style="font-size:11px;padding:3px 8px">破棄</button>`;
-      return `<div style="padding:6px 0;border-top:1px solid var(--border)">
-        <div style="font-weight:600">${escHtml(it.topic || 'Zoom MTG')}</div>
-        <div style="color:var(--text-sub);font-size:11px;margin:2px 0">
-          ${escHtml(ts)} / ${it.participants.length || 0}人
-          <span style="color:${stColor};font-weight:600;margin-left:4px">${stLabel}</span>
-        </div>
-        ${it.error_message ? `<div style="color:var(--red);font-size:11px;margin:2px 0">${escHtml(it.error_message)}</div>` : ''}
-        <div style="margin-top:4px">${buttons}</div>
-      </div>`;
-    }).join('');
+    list.innerHTML = items.map(it => renderZoomCloudItem(it)).join('');
   } catch (e) {
-    console.error('loadZoomPending failed', e);
-    section.style.display = 'none';
+    list.innerHTML = `<div style="color:var(--red);padding:12px;font-size:13px">取得失敗: ${escHtml(e.message)}</div>`;
   }
 }
 
-async function importZoomPending(pendingId) {
-  if (!confirm('このZoom MTGを取り込みますか？\n取り込み後、解析（Run1/Run2）は通常通り実行してください。')) return;
+function renderZoomCloudItem(it) {
+  const ts = it.start_time ? formatDate(it.start_time) : (it.webhook_notified_at ? formatDate(it.webhook_notified_at) : '');
+  const dur = (it.duration_min != null) ? `${it.duration_min}分` : '—';
+  const fc = (it.file_count != null) ? `${it.file_count}ファイル` : '';
+  const pSep = it.has_participant_audio ? '✓話者別音声あり' : (it.source === 'zoom_api' ? '⚠ミックスのみ' : '');
+
+  let badge = '', btnHtml = '';
+  const uuidEnc = encodeURIComponent(it.uuid || '');
+  switch (it.status) {
+    case 'imported':
+      badge = `<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">取り込み済</span>`;
+      btnHtml = it.imported_project_id
+        ? `<button onclick="selectProject('${it.imported_project_id}');closeZoomCloudModal()" class="btn-ghost btn-sm" style="font-size:12px">プロジェクトを開く</button>`
+        : '';
+      break;
+    case 'notified':
+      badge = `<span style="background:var(--sky);color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">Webhook通知済</span>`;
+      btnHtml = it.source === 'zoom_api'
+        ? `<button onclick="importZoomCloud('${uuidEnc}', this)" class="btn-sky btn-sm" style="font-size:12px;padding:4px 12px">取り込む</button>`
+        : `<span style="font-size:11px;color:var(--red)">${escHtml(it.note || 'Zoom側に録画なし')}</span>`;
+      break;
+    case 'pending_download':
+      badge = `<span style="background:var(--text-sub);color:#fff;padding:2px 8px;border-radius:10px;font-size:11px">DL中…</span>`;
+      btnHtml = '';
+      break;
+    case 'error':
+      badge = `<span style="background:var(--red);color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">エラー</span>`;
+      btnHtml = `<button onclick="importZoomCloud('${uuidEnc}', this)" class="btn-sky btn-sm" style="font-size:12px;padding:4px 12px">再試行</button>`;
+      break;
+    case 'available':
+    default:
+      badge = `<span style="background:var(--surface2);color:var(--text-sub);padding:2px 8px;border-radius:10px;font-size:11px;border:1px solid var(--border)">未取得</span>`;
+      btnHtml = `<button onclick="importZoomCloud('${uuidEnc}', this)" class="btn-sky btn-sm" style="font-size:12px;padding:4px 12px">取り込む</button>`;
+      break;
+  }
+
+  return `<div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);display:flex;flex-direction:column;gap:6px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+      <div style="font-weight:700;font-size:14px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${escHtml(it.topic || 'Zoom MTG')}</div>
+      ${badge}
+    </div>
+    <div style="font-size:12px;color:var(--sub)">
+      ${escHtml(ts)} / ${dur} / ${fc}${pSep ? ' / ' + pSep : ''}
+    </div>
+    ${it.host_email ? `<div style="font-size:11px;color:var(--sub)">host: ${escHtml(it.host_email)}</div>` : ''}
+    <div style="display:flex;gap:6px;justify-content:flex-end">${btnHtml}</div>
+  </div>`;
+}
+
+async function importZoomCloud(uuidEnc, btn) {
+  if (!confirm('このZoom録画を取り込みますか？\n参加者別音声ファイルをDLしてプロジェクト化します（数十秒〜数分）。')) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'DL中…';
+  }
   try {
-    const res = await apiFetch(`/api/zoom/pending/${pendingId}/import`, {method: 'POST'});
+    const res = await apiFetch(`/api/zoom/cloud-recordings/${uuidEnc}/import`, {method: 'POST'});
     if (!res.ok) {
       const err = await res.text();
       alert(`取り込み失敗: ${err}`);
+      if (btn) { btn.disabled = false; btn.textContent = '再試行'; }
       return;
     }
     const data = await res.json();
-    await loadZoomPending();
+    await loadZoomCloud();
     await loadProjects();
-    if (data.project_id) selectProject(data.project_id);
+    if (data.ok && data.project_id) {
+      closeZoomCloudModal();
+      selectProject(data.project_id);
+    } else if (data.message === 'already imported') {
+      alert('既に取り込み済みです');
+      if (data.project_id) {
+        closeZoomCloudModal();
+        selectProject(data.project_id);
+      }
+    }
   } catch (e) {
     alert(`取り込み失敗: ${e.message}`);
-  }
-}
-
-async function deleteZoomPending(pendingId) {
-  if (!confirm('この取り込み待ちを破棄しますか？\n（ダウンロード済み音声ファイルも削除されます）')) return;
-  try {
-    const res = await apiFetch(`/api/zoom/pending/${pendingId}`, {method: 'DELETE'});
-    if (!res.ok) {
-      alert(`破棄失敗: ${await res.text()}`);
-      return;
-    }
-    await loadZoomPending();
-  } catch (e) {
-    alert(`破棄失敗: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '再試行'; }
   }
 }
 
@@ -950,9 +1033,6 @@ async function submitZoomUpload() {
 
 // ── プロジェクト一覧 ──
 async function loadProjects() {
-  // Zoom 取り込み待ちも同時に更新
-  loadZoomPending();
-
   const list = document.getElementById('project-list');
   try {
     const res = await apiFetch('/api/projects');
@@ -1484,9 +1564,9 @@ const SVC_LABELS = {
 
 // ── LLM突合設定（localStorage） ──
 function getMergeSettings() {
-  const ws = parseInt(localStorage.getItem('merge_w_ws')   ?? '1', 10);
+  const ws = parseInt(localStorage.getItem('merge_w_ws')   ?? '0', 10);
   const r1 = parseInt(localStorage.getItem('merge_w_run1') ?? '7', 10);
-  const r2 = parseInt(localStorage.getItem('merge_w_run2') ?? '2', 10);
+  const r2 = parseInt(localStorage.getItem('merge_w_run2') ?? '3', 10);
   return { w_ws: ws, w_run1: r1, w_run2: r2 };
 }
 function saveMergeWeights(ws, r1, r2) {
@@ -1554,6 +1634,10 @@ async function loadMergeAdvanced() {
     document.getElementById('ms-orphan-sim').value         = s.orphan_sim_threshold;
     document.getElementById('ms-max-tokens').value         = s.max_tokens_per_chunk;
     document.getElementById('ms-retry').value              = s.retry_per_chunk;
+    document.getElementById('ms-speaker-priority').value   = s.speaker_priority || 'deepgram';
+    document.getElementById('ms-w-ws').value               = s.default_w_ws   ?? 0;
+    document.getElementById('ms-w-run1').value             = s.default_w_run1 ?? 7;
+    document.getElementById('ms-w-run2').value             = s.default_w_run2 ?? 3;
     document.getElementById('ms-backbone-fixed-row').style.display =
       (s.backbone_algo === 'fixed') ? '' : 'none';
     document.getElementById('merge-advanced-status').textContent = '読み込み済';
@@ -1574,6 +1658,10 @@ async function saveMergeAdvanced() {
     orphan_sim_threshold: parseFloat(document.getElementById('ms-orphan-sim').value),
     max_tokens_per_chunk: parseInt(document.getElementById('ms-max-tokens').value, 10),
     retry_per_chunk:      parseInt(document.getElementById('ms-retry').value, 10),
+    speaker_priority:     document.getElementById('ms-speaker-priority').value,
+    default_w_ws:         parseInt(document.getElementById('ms-w-ws').value, 10),
+    default_w_run1:       parseInt(document.getElementById('ms-w-run1').value, 10),
+    default_w_run2:       parseInt(document.getElementById('ms-w-run2').value, 10),
   };
   try {
     const r = await apiFetch('/api/settings/merge', {
@@ -1590,7 +1678,7 @@ async function saveMergeAdvanced() {
 }
 function resetMergeAdvanced() {
   document.getElementById('ms-backbone-algo').value      = 'fixed';
-  document.getElementById('ms-backbone-fixed').value     = 'run1';
+  document.getElementById('ms-backbone-fixed').value     = 'run2';
   document.getElementById('ms-default-model').value      = 'gemini-2.5-flash';
   document.getElementById('ms-chunk-size').value         = 25;
   document.getElementById('ms-parallel').value           = 3;
@@ -1598,6 +1686,10 @@ function resetMergeAdvanced() {
   document.getElementById('ms-orphan-sim').value         = 0.4;
   document.getElementById('ms-max-tokens').value         = 8192;
   document.getElementById('ms-retry').value              = 1;
+  document.getElementById('ms-speaker-priority').value   = 'deepgram';
+  document.getElementById('ms-w-ws').value               = 0;
+  document.getElementById('ms-w-run1').value             = 7;
+  document.getElementById('ms-w-run2').value             = 3;
   document.getElementById('ms-backbone-fixed-row').style.display = '';
 }
 document.addEventListener('change', (e) => {
@@ -1607,7 +1699,20 @@ document.addEventListener('change', (e) => {
   }
 });
 
+const SETTINGS_PIN = '5963';
+function _requireSettingsPin() {
+  if (sessionStorage.getItem('settings_pin_ok') === '1') return true;
+  const v = prompt('設定モーダルを開くには暗証番号を入力してください');
+  if (v === null) return false;
+  if (v.trim() === SETTINGS_PIN) {
+    sessionStorage.setItem('settings_pin_ok', '1');
+    return true;
+  }
+  alert('暗証番号が違います');
+  return false;
+}
 async function openApiSettings() {
+  if (!_requireSettingsPin()) return;
   document.getElementById('settings-modal').classList.add('show');
   document.body.classList.add('modal-open');
   document.getElementById('api-keys-list').innerHTML = '<p style="color:var(--sub);font-size:13px">読み込み中…</p>';
