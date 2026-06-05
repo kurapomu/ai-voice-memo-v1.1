@@ -125,6 +125,10 @@ button:disabled{opacity:.4;cursor:default}
 .compare-cell.cell-diff{background:rgba(251,191,36,.1);border-left:2px solid var(--yellow)}
 .cell-meta{display:flex;align-items:center;gap:6px;margin-bottom:3px}
 .cell-speaker{font-size:12px;font-weight:700}
+.cell-speaker.editable{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
+.cell-speaker.editable:hover{background:var(--surface2)}
+.speaker-select{font-size:12px;padding:2px 4px;background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:4px}
 .cell-ts{font-size:11px;color:var(--sub)}
 .cell-body{font-size:14px;line-height:1.5;word-break:break-all}
 .cell-empty{color:var(--border);font-size:18px}
@@ -768,6 +772,7 @@ body.modal-open{overflow:hidden}
 <script>
 const API = '';
 let currentProjectId = null;
+let currentProject = null;
 let pollTimer = null;
 let authHeader = sessionStorage.getItem('admin_auth') || '';
 const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
@@ -1175,6 +1180,7 @@ async function selectProject(id) {
 }
 
 function renderDetail(p) {
+  currentProject = p;
   const names = p.participants.map(pt => pt.name || `話者${pt.idx+1}`).join('・') || '（参加者なし）';
   document.getElementById('proj-title').textContent = formatDate(p.created_at);
   document.getElementById('proj-sub').innerHTML = `${escHtml(names)}&nbsp;&nbsp;${statusBadge(p.status)}`;
@@ -1306,6 +1312,67 @@ function textSim(a, b) {
   return (A.size + B.size) === 0 ? 0 : (2 * inter) / (A.size + B.size);
 }
 
+async function startSpeakerEdit(el) {
+  if (el.dataset.editing === '1') return;
+  el.dataset.editing = '1';
+  const oldValue = el.textContent.trim();
+  const rowIdx = parseInt(el.dataset.rowIdx, 10);
+  const candidates = Array.isArray(currentProject?.participants)
+    ? currentProject.participants.map(p => p.name).filter(Boolean)
+    : [];
+  const options = Array.from(new Set([oldValue, ...candidates, '未設定']))
+                       .filter(Boolean);
+
+  const select = document.createElement('select');
+  select.className = 'speaker-select';
+  options.forEach(name => {
+    const o = document.createElement('option');
+    o.value = name; o.textContent = name;
+    if (name === oldValue) o.selected = true;
+    select.appendChild(o);
+  });
+  const origColor = el.style.color;
+  el.innerHTML = '';
+  el.appendChild(select);
+  select.focus();
+
+  let done = false;
+  const finish = async () => {
+    if (done) return; done = true;
+    const newValue = select.value;
+    if (newValue === oldValue) {
+      el.textContent = oldValue;
+      el.dataset.editing = '';
+      return;
+    }
+    try {
+      const res = await apiFetch(
+        `/api/projects/${currentProject.id}/merged/speaker`,
+        { method: 'PATCH',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ row_idx: rowIdx, speaker: newValue }) }
+      );
+      if (!res.ok) throw new Error(await res.text());
+      el.textContent = newValue;
+      const newIdx = currentProject.participants.findIndex(pt => pt.name === newValue);
+      el.style.color = newIdx >= 0
+        ? SPEAKER_COLORS[newIdx % SPEAKER_COLORS.length]
+        : (newValue === '未設定' ? 'var(--sub)' : 'var(--purple)');
+      if (currentProject.merged?.result?.[rowIdx]) {
+        currentProject.merged.result[rowIdx].speaker = newValue;
+      }
+    } catch (e) {
+      alert('話者変更に失敗: ' + e.message);
+      el.textContent = oldValue;
+      el.style.color = origColor;
+    } finally {
+      el.dataset.editing = '';
+    }
+  };
+  select.addEventListener('change', finish);
+  select.addEventListener('blur', finish);
+}
+
 function renderMerged(p) {
   const section = document.getElementById('merged-section');
   if (!p.merged) { section.style.display = 'none'; return; }
@@ -1326,12 +1393,12 @@ function renderMerged(p) {
 
   // 全ソースを {ms, col, seg, ...} で統一形式に集約
   const items = [];
-  (p.merged.result || []).forEach(seg => {
+  (p.merged.result || []).forEach((seg, origIdx) => {
     const spkIdx = p.participants.findIndex(pt => pt.name === seg.speaker);
     const spkColor = spkIdx >= 0 ? SPEAKER_COLORS[spkIdx % SPEAKER_COLORS.length] : 'var(--purple)';
     items.push({
       ms: tsToMs(seg.ts), col: 'llm',
-      seg: {...seg, color: spkColor}
+      seg: {...seg, color: spkColor, _resultIdx: origIdx}
     });
   });
   p.ref_segments.forEach(s => {
@@ -1489,9 +1556,13 @@ function renderMerged(p) {
       const tsHtml = s.ts ? `<span class="cell-ts">${escHtml(s.ts)}</span>` : '';
       const noteHtml = s.note ? `<span class="cell-note-tag">⚠ ${escHtml(s.note)}</span>` : '';
       const sep = i > 0 ? '<hr style="border:0;border-top:1px dashed #333;margin:6px 0">' : '';
+      const isLlm = col === 'llm';
+      const editable = (isLlm && Number.isInteger(s._resultIdx))
+        ? ` class="cell-speaker editable" data-row-idx="${s._resultIdx}" onclick="startSpeakerEdit(this)"`
+        : ` class="cell-speaker"`;
       return `${sep}
         <div class="cell-meta">
-          <span class="cell-speaker" style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
+          <span${editable} style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
           ${tsHtml}
         </div>
         <div class="cell-body">${escHtml(s.text || '')}</div>

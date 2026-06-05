@@ -1744,6 +1744,61 @@ async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
     return {'ok': True, 'summary': summary, 'tasks': tasks}
 
 
+# ── LLM最終版トランスクリプト：話者名のレコード単位編集 ──────────────
+@app.patch('/api/projects/{project_id}/merged/speaker')
+async def update_merged_speaker(project_id: str, request: Request,
+                                _: str = Depends(require_admin)):
+    """LLM最終版トランスクリプトの指定行の話者名を更新する。
+    body: {"row_idx": int, "speaker": str}
+    """
+    body = await request.json()
+    row_idx = body.get('row_idx')
+    new_speaker = (body.get('speaker') or '').strip()
+    if not isinstance(row_idx, int) or row_idx < 0:
+        raise HTTPException(400, 'row_idx required (non-negative int)')
+    if not new_speaker:
+        raise HTTPException(400, 'speaker required (non-empty)')
+
+    conn = get_conn()
+    merged = conn.execute(
+        'SELECT id, result_json FROM merged_transcripts '
+        'WHERE project_id=? ORDER BY id DESC LIMIT 1',
+        (project_id,),
+    ).fetchone()
+    if not merged:
+        conn.close()
+        raise HTTPException(404, 'merged transcript not found')
+
+    try:
+        rows = json.loads(merged['result_json']) if merged['result_json'] else []
+    except Exception:
+        conn.close()
+        raise HTTPException(500, 'result_json parse error')
+
+    if row_idx >= len(rows):
+        conn.close()
+        raise HTTPException(400, f'row_idx out of range: {row_idx} >= {len(rows)}')
+
+    old_speaker = rows[row_idx].get('speaker', '')
+    rows[row_idx]['speaker'] = new_speaker
+    txt = rows[row_idx].get('text', '')
+    if isinstance(txt, str) and '【要確認:話者】' in txt:
+        rows[row_idx]['text'] = txt.replace('【要確認:話者】', '').rstrip()
+
+    conn.execute(
+        'UPDATE merged_transcripts SET result_json=? WHERE id=?',
+        (json.dumps(rows, ensure_ascii=False), merged['id']),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(
+        f'merged speaker update: project={project_id} row={row_idx} '
+        f'{old_speaker!r} -> {new_speaker!r}'
+    )
+    return {'ok': True, 'row_idx': row_idx,
+            'old_speaker': old_speaker, 'new_speaker': new_speaker}
+
+
 # ── Excel エクスポート（管理画面のタイムライン4カラムビューをそのまま書出） ──
 @app.post('/api/projects/{project_id}/export.xlsx')
 async def export_project_xlsx(project_id: str, request: Request,
