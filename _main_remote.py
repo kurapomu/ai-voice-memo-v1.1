@@ -171,13 +171,16 @@ def _check_limit(service: str, expected_units: float = 0, expected_unit_type: st
             raise HTTPException(429,
                 f'{service} 日次リクエスト上限超過：{daily["requests"]} / {limits["daily_requests"]}')
 AUDIO_DIR   = os.environ.get('AUDIO_DIR', '/var/jizo/audio')
-ADMIN_USER  = os.environ.get('ADMIN_USER', 'admin')
-ADMIN_PASS  = os.environ.get('ADMIN_PASS', 'changeme')
+ADMIN_USER  = os.environ.get('ADMIN_USER', '')
+ADMIN_PASS  = os.environ.get('ADMIN_PASS', '')
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 app = FastAPI()
-security = HTTPBasic()
+# auto_error=False: Authorization ヘッダが無くても 401 を自動送出せず（=ブラウザの
+# ネイティブBasic認証ダイアログを出さず）、require_admin 側で WWW-Authenticate 無しの
+# 401 を返す。認証は管理画面の独自ログインフォームで行う。
+security = HTTPBasic(auto_error=False)
 
 app.add_middleware(
     CORSMiddleware,
@@ -189,13 +192,17 @@ app.add_middleware(
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
-def require_admin(creds: HTTPBasicCredentials = Depends(security)):
+def require_admin(creds: HTTPBasicCredentials | None = Depends(security)):
+    # 認証情報が無い／管理者資格情報が未設定なら 401（WWW-Authenticate は付けない＝
+    # ブラウザのネイティブBasicダイアログを出さない。空設定でのバイパスも防ぐ）。
+    if creds is None or not ADMIN_USER or not ADMIN_PASS:
+        raise HTTPException(401, 'Unauthorized')
     ok = (
         secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
         secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode())
     )
     if not ok:
-        raise HTTPException(401, 'Unauthorized', headers={'WWW-Authenticate': 'Basic'})
+        raise HTTPException(401, 'Unauthorized')
     return creds.username
 
 
