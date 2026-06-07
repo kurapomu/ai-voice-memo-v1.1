@@ -1234,30 +1234,46 @@ def _detect_hallucination(text: str, candidates: list) -> bool:
 
 
 def _parse_jsonl(raw: str, expected_n: int):
-    """JSONL or JSON array をパース。expected_n と一致しなければ None。"""
+    """JSONL or JSON array をパース。idx が 1..expected_n を各1個ずつ網羅していれば
+    idx 昇順のリストを返す。欠落/重複/余剰があれば None（=主軸フォールバック）。
+    各オブジェクトの "text" は文字列 or 配列（文分割）を許容する。"""
     raw = raw.strip()
     fence_match = re.search(r'```(?:json)?\s*(.*?)(?:```|\Z)', raw, re.DOTALL)
     if fence_match:
         raw = fence_match.group(1).strip()
+
+    items = []
     if raw.startswith('['):
         try:
             data = json.loads(raw)
-            if isinstance(data, list) and len(data) == expected_n:
-                return data
+            if isinstance(data, list):
+                items = [d for d in data if isinstance(d, dict)]
         except Exception:
-            pass
-    result = []
-    for line in raw.split('\n'):
-        line = line.strip().rstrip(',')
-        if not line or line in ('[', ']'):
+            items = []
+    if not items:
+        for line in raw.split('\n'):
+            line = line.strip().rstrip(',')
+            if not line or line in ('[', ']'):
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    items.append(obj)
+            except Exception:
+                continue
+
+    # idx 網羅検証：1..expected_n を各1個ずつ
+    by_idx = {}
+    for obj in items:
+        idx = obj.get('idx')
+        if not isinstance(idx, int) or idx < 1 or idx > expected_n:
             continue
-        try:
-            result.append(json.loads(line))
-        except Exception:
-            continue
-    if len(result) == expected_n:
-        return result
-    return None
+        if idx in by_idx:  # 重複 idx は不正
+            return None
+        by_idx[idx] = obj
+    if len(by_idx) != expected_n:
+        return None
+    return [by_idx[i] for i in range(1, expected_n + 1)]
 
 
 async def _call_gemini_chunk(system_prompt: str, user_prompt: str,
@@ -1307,18 +1323,28 @@ def _build_chunk_prompt(chunk: dict, plist: str, w_ws: int, w_run1: int, w_run2:
         '当該行の先頭または末尾に重複している場合（漢字変換違い・区切り違い・送り仮名違いを含む同一発話）、'
         '当該行から重複部分のみをトリムして自然な境界にする。'
         '明確な重複のみトリムし、別発話か判断に迷う場合は残す。\n'
+        '5. 文脈による文分割：1つの行のテキストが句読点が無くても明らかに2文以上に分かれている場合、'
+        '"text" を文単位の配列にして分割してよい（例：「絶句してましたそれはそうだろう」→'
+        '["絶句してました","それはそうだろう"]）。分割は再区切りのみで、文字の追加・削除・新規生成は禁止'
+        '（配列を連結すると元の内容と一致すること）。1文なら文字列のまま返す。明らかに2文以上のときだけ分割し、迷えば分割しない。\n'
         '\n'
         '絶対禁止事項：\n'
-        '- 行の追加・削除・統合・分割・並べ替え\n'
+        '- 行(idx)の追加・削除・統合・並べ替え（ただし1行の "text" を文単位で配列分割することは上記5で許可）\n'
         '- 候補テキストに存在しない語句の新規生成\n'
         '- 主軸テキストの意味を変える書換え\n'
         '\n'
         '## テキスト本文の優先採用ルール（重要）\n'
         '- 主軸（多くの場合 Run2 / Deepgram）はレコード分離（行の切れ目）と話者の正確性のために選定されています。\n'
-        '- ただしテキスト本文の精度は Run1（Whisper）が高い場合が多いです。\n'
-        '- 同じ発話に Run1 候補が存在する場合、テキスト本文は Run1 を最優先で採用してください。\n'
-        '- Run2 のテキストは「Run1 候補がない箇所の補完」「Run1 と意味が一致する整合確認」のみに使ってください。\n'
-        '- ただし行の構造（行数・順序・ts・話者）は主軸を絶対遵守し、変更してはなりません。\n'
+        '- テキスト本文は Run1（Whisper）を基本として採用してください（Whisper はテキスト精度が高い場合が多い）。\n'
+        '- ただし、ある行の Run1 候補が明らかに不自然・文意不通・日本語として破綻している場合'
+        '（意味の通らないカタカナ羅列、同音異義の誤変換など）で、かつ他ソース（Run2/WS）に同一発話の'
+        'より自然で意味の通る候補が存在する場合は、そのより自然な候補を本文として採用してよい。\n'
+        '- 複数候補のうち一方が意味の通る日本語、他が破綻している場合は、意味の通る方を優先する。\n'
+        '- Run2 のテキストは「Run1 候補がない箇所の補完」「Run1 と意味が一致する整合確認」'
+        'に加え「Run1 が破綻している箇所の置換」にも使ってよい。\n'
+        '- 保守的に：明らかな破綻のときのみ置換し、迷う場合は Run1 のまま'
+        '（固有名詞・専門用語を誤った候補で置換しないこと）。\n'
+        '- ただし行の構造（idx・順序・ts・話者）は主軸を絶対遵守し、変更してはなりません。\n'
         '\n'
         '判断に迷う場合は主軸テキストをそのまま返してください。誠実さが速度より大切です。'
     )
@@ -1355,9 +1381,11 @@ def _build_chunk_prompt(chunk: dict, plist: str, w_ws: int, w_run1: int, w_run2:
         f"## 文脈（参照のみ・出力に含めない）\n{_fmt_ctx(chunk['ctx_next'], 'next-')}\n\n"
         f"## 出力形式（JSONL、1行=1JSON、改行区切り、フェンス不要）\n"
         f'{{"idx":1,"text":"...","note":null}}\n'
-        f'{{"idx":2,"text":"...","note":"要確認の理由"}}\n'
+        f'{{"idx":2,"text":["文1","文2"],"note":null}}   ← 文分割する場合は text を配列に\n'
+        f'{{"idx":3,"text":"...","note":"要確認の理由"}}\n'
         f"...\n\n"
-        f"※ 必ず {N} 行返してください。idx は 1〜{N} の連番厳守。"
+        f"※ 入力 {N} 行それぞれに対し idx 付き JSON を1つずつ、必ず {N} 個返してください"
+        f"（idx は 1〜{N} の連番厳守・各idx1個）。文分割で最終的な文数が増えても、idx の個数は {N} のままです。"
     )
     return system_prompt, user_prompt
 
@@ -1571,21 +1599,41 @@ async def merge_project(project_id: str,
                 final_segs.append(_make_segment(row, final_text, None))
         else:
             for in_row, out in zip(chunk['rows'], llm_out):
-                text = ((out.get('text') if isinstance(out, dict) else '') or '').strip()
+                raw_text = out.get('text') if isinstance(out, dict) else ''
                 note = (out.get('note') if isinstance(out, dict) else None)
                 candidates = [in_row.get('cand_ws',''), in_row.get('cand_run1',''),
                               in_row.get('cand_run2',''), in_row['backbone_text']]
-                if not text:
+
+                def _append_fallback(seg_note):
                     final_text = in_row['backbone_text']
-                elif _detect_hallucination(text, candidates):
-                    halluc_rows += 1
-                    final_text = in_row['backbone_text']
-                    note = '要確認:LLM過剰補填可能性'
+                    if in_row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
+                        final_text = (final_text + ' 【要確認:話者】').strip()
+                    final_segs.append(_make_segment(in_row, final_text, seg_note))
+
+                # text は文字列 or 配列（文分割）
+                if isinstance(raw_text, list):
+                    parts = [str(p).strip() for p in raw_text if str(p).strip()]
                 else:
-                    final_text = text
-                if in_row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
-                    final_text = (final_text + ' 【要確認:話者】').strip()
-                final_segs.append(_make_segment(in_row, final_text, note))
+                    s = str(raw_text or '').strip()
+                    parts = [s] if s else []
+
+                if not parts:
+                    _append_fallback(note)            # 空 → 主軸フォールバック
+                    continue
+                # 分割は文字を増やさないため、連結テキストで反幻覚を1回判定
+                if _detect_hallucination(''.join(parts), candidates):
+                    halluc_rows += 1
+                    _append_fallback('要確認:LLM過剰補填可能性')   # 幻覚 → 主軸1行（分割しない）
+                    continue
+                # 正常：分割 parts を各セグメント化（ts・話者・候補は親行を継承）
+                for j, part in enumerate(parts):
+                    seg_text = part
+                    seg_note = note if j == 0 else None       # note は先頭セグメントのみ
+                    # 話者不確実マーカーは最後のセグメントにのみ付与
+                    if (j == len(parts) - 1 and in_row.get('sp_uncertain')
+                            and '【要確認:話者】' not in seg_text):
+                        seg_text = (seg_text + ' 【要確認:話者】').strip()
+                    final_segs.append(_make_segment(in_row, seg_text, seg_note))
 
     logger.info(
         f'merge llm done chunks={len(chunks)} fallback={fallback_chunks} '
