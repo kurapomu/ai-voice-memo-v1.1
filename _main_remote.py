@@ -1219,18 +1219,17 @@ def _chunk_rows(rows: list, size: int, ctx: int = 2):
     return chunks
 
 
-def _detect_hallucination(text: str, candidates: list) -> bool:
-    """text に「候補連結文字列に含まれない4文字以上の連続部分文字列」があれば幻覚。"""
+def _detect_hallucination(text: str, candidates: list, ratio_threshold: float = 0.5) -> bool:
+    """text の4文字窓のうち、候補連結文字列に存在しない割合が ratio_threshold を超えたら
+    「過剰補填の可能性あり」とみなす。漢字変換違い・小さな自然化（候補外が散発）は許容し、
+    丸ごとの捏造（候補外が過半数）のみ捕捉する。"""
     norm = _normalize_for_compare(text)
     joined = ''.join(_normalize_for_compare(c or '') for c in candidates)
-    if not norm or not joined:
+    if not norm or not joined or len(norm) < 4:
         return False
-    if len(norm) < 4:
-        return False
-    for i in range(0, len(norm) - 3):
-        if norm[i:i+4] not in joined:
-            return True
-    return False
+    total = len(norm) - 3
+    novel = sum(1 for i in range(total) if norm[i:i+4] not in joined)
+    return (novel / total) > ratio_threshold
 
 
 def _parse_jsonl(raw: str, expected_n: int):
@@ -1604,12 +1603,6 @@ async def merge_project(project_id: str,
                 candidates = [in_row.get('cand_ws',''), in_row.get('cand_run1',''),
                               in_row.get('cand_run2',''), in_row['backbone_text']]
 
-                def _append_fallback(seg_note):
-                    final_text = in_row['backbone_text']
-                    if in_row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
-                        final_text = (final_text + ' 【要確認:話者】').strip()
-                    final_segs.append(_make_segment(in_row, final_text, seg_note))
-
                 # text は文字列 or 配列（文分割）
                 if isinstance(raw_text, list):
                     parts = [str(p).strip() for p in raw_text if str(p).strip()]
@@ -1618,14 +1611,21 @@ async def merge_project(project_id: str,
                     parts = [s] if s else []
 
                 if not parts:
-                    _append_fallback(note)            # 空 → 主軸フォールバック
+                    # 空出力のみ主軸フォールバック（戻すべきLLMテキストが無いため）
+                    final_text = in_row['backbone_text']
+                    if in_row.get('sp_uncertain') and '【要確認:話者】' not in final_text:
+                        final_text = (final_text + ' 【要確認:話者】').strip()
+                    final_segs.append(_make_segment(in_row, final_text, note))
                     continue
-                # 分割は文字を増やさないため、連結テキストで反幻覚を1回判定
+
+                # 過剰補填の可能性は note で警告するが、LLMテキストは残す（garbled主軸に戻さない）。
+                # 分割は文字を増やさないため、連結テキストで1回判定。
                 if _detect_hallucination(''.join(parts), candidates):
                     halluc_rows += 1
-                    _append_fallback('要確認:LLM過剰補填可能性')   # 幻覚 → 主軸1行（分割しない）
-                    continue
-                # 正常：分割 parts を各セグメント化（ts・話者・候補は親行を継承）
+                    if not note:
+                        note = '要確認:LLM過剰補填可能性'
+
+                # 分割 parts を各セグメント化（ts・話者・候補は親行を継承）
                 for j, part in enumerate(parts):
                     seg_text = part
                     seg_note = note if j == 0 else None       # note は先頭セグメントのみ
