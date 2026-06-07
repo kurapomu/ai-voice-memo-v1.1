@@ -293,6 +293,7 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - ✅ **LLM最終版トランスクリプトの Excel エクスポート（管理画面ビューと同一の4カラム + Summary/Tasks/Issues シート）** — 2026-06-05
 - ✅ **LLM統合詳細設定の管理画面 UI 化**（チャンクサイズ・並列・主軸選定アルゴリズム等9項目） — 2026-06-05
 - ✅ 録音20分自動pause・STT無反応バナー
+- ✅ **一時停止/再開フロー（フェーズ2f）** — 実装済み＋実機検証済み（2026-06-07）。`pauseRecording`/`resumeRecording`（`index.html`）でチャンク分割・蓄積（`allAudioBlobs`）・一時停止時自動IDB保存・再開で20分窓リセット。`completeAndUpload` が全チャンク（空除外）を複数 `audio` で POST。一時停止中の詳細パネル（チャンク個別削除）あり
 - ✅ ログシステム（12hローテーション・`/api/logs`で閲覧）
 
 - ✅ **Zoom連携（v2：Pull型一覧フロー）** — 2026-06-05 完成。Server-to-Server OAuth で自Zoomアカウント主催の Cloud Recording を取り込み。
@@ -308,7 +309,6 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - ⬜ 用途別テンプレート（会議・インタビュー・講義）
 - ⬜ Presidio + GiNZA によるPII保護
 - ⬜ プライバシーポリシー整備・公開
-- ⬜ 一時停止/再開フロー（フェーズ2f：プラン承認済み・未実装）
 
 ### 検討事項
 - AssemblyAI連携コードは`main.py`に残置（Whisper/Deepgram移行後に再評価）
