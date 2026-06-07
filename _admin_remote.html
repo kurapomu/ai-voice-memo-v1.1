@@ -2318,9 +2318,9 @@ const SVC_INFO = {
 function renderApiKeys(keys) {
   const wrap = document.getElementById('api-keys-list');
   wrap.innerHTML = '';
-  const showOrder = ['whisper','deepgram','gemini-flash'];
+  const showOrder = ['whisper','deepgram','gemini-flash','claude-haiku'];
   // 編集用 key名（バックエンドAPIに送るキー）
-  const editKeyMap = {'whisper':'whisper','deepgram':'deepgram','gemini-flash':'gemini'};
+  const editKeyMap = {'whisper':'whisper','deepgram':'deepgram','gemini-flash':'gemini','claude-haiku':'anthropic'};
   showOrder.forEach(svc => {
     const k = keys[svc];
     if (!k) return;
