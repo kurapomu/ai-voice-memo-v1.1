@@ -63,6 +63,7 @@ Gemini 2.5 Flash で**重み付き統合**（WS:Run1:Run2 = 合計10）→ PC管
 - `index.html` — モバイルPWA全体（VanillaJS・約1000行）※**正典：これを編集→VPSへscp**
 - `manifest.json` — PWAマニフェスト
 - `sw.js` — Service Worker（HTMLはネットワーク優先・他はキャッシュ優先）。現バージョンは `sw.js` 冒頭の `const CACHE = 'voicememo-vX.Y';` を直接確認。**編集時は必ず +0.1 インクリメント**
+- **管理画面バージョン表示**：`_admin_remote.html` ヘッダ右端の `<span id="app-version">vX.Y</span>`。**プロジェクト内のいずれかのファイルを更新・デプロイするたびに必ず +0.1 インクリメント**（main.py / index.html / sw.js 等どれを変えても admin の app-version を上げる＝全体のビルド番号）。`/fix` 実行時もこのルールに従い加算する
 - `CONCEPT.md` — 人間向け：プロダクト哲学・背景（Claude は通常参照不要）
 - `docs/system-overview.html` — 社外説明用 HTML
 - `docs/superpowers/plans/` — 中長期実装プラン（`YYYY-MM-DD-トピック.md`）
