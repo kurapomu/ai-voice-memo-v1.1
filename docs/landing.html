@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>対面会議に強いAI議事録｜話者つき文字起こし</title>
+<meta name="description" content="録音中の話者ワンタップ＋AI文字起こしで、対面会議でも「誰が・何を話したか」を正確に。要約・タスク抽出・Excel出力まで一気通貫。">
+<style>
+  :root {
+    --bg: #FAFAFA;
+    --surface: #FFFFFF;
+    --border: #D4D4D4;
+    --text: #111111;
+    --text-sub: #444444;
+    --text-mute: #6B6B6B;
+    --accent: #1F4FAA;
+    --accent-soft: #E6EDF8;
+    --accent-ink: #14346F;
+    --ok: #1D6B3A;
+    --ok-soft: #DCFCE7;
+    --warn: #B45309;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+    font-size: 16px;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* CTA buttons */
+  .btn {
+    display: inline-block;
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    padding: 14px 28px;
+    border-radius: 6px;
+    border: 2px solid var(--accent);
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--accent); color: #FFFFFF; }
+  .btn-primary:hover { background: var(--accent-ink); border-color: var(--accent-ink); }
+  .btn-ghost { background: transparent; color: var(--accent); }
+  .btn-ghost:hover { background: var(--accent-soft); }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+  /* Hero */
+  .hero {
+    background: var(--surface);
+    border-bottom: 4px solid var(--text);
+    padding: 64px 0 56px;
+  }
+  .hero h1 {
+    font-size: 36px;
+    line-height: 1.4;
+    margin: 0 0 16px;
+    letter-spacing: 0.01em;
+  }
+  .hero .sub {
+    font-size: 20px;
+    color: var(--text-sub);
+    margin: 0 0 28px;
+    max-width: 720px;
+  }
+  .hero .note { font-size: 13px; color: var(--text-mute); margin-top: 12px; }
+
+  /* Trust strip */
+  .trust {
+    background: var(--accent-soft);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 0;
+  }
+  .trust p { margin: 0; color: var(--text); font-size: 16px; }
+  .trust .metric { font-weight: 700; color: var(--accent); }
+
+  section.block { padding: 56px 0; }
+  section.block.alt { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  h2 {
+    font-size: 28px;
+    margin: 0 0 20px;
+    padding-left: 14px;
+    border-left: 6px solid var(--accent);
+  }
+  h2.center { border: none; padding: 0; text-align: center; }
+  .lead-q { font-size: 20px; font-weight: 700; color: var(--text); margin: 0 0 16px; }
+  p.body { color: var(--text-sub); margin: 0 0 14px; max-width: 760px; }
+  ul.pain { color: var(--text-sub); padding-left: 22px; margin: 0 0 16px; max-width: 720px; }
+  ul.pain li { margin: 8px 0; }
+  .kicker { font-weight: 700; color: var(--text); }
+
+  /* Benefit grid */
+  .benefits { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 24px; }
+  .benefit {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+  }
+  section.block.alt .benefit { background: var(--bg); }
+  .benefit h3 {
+    font-size: 18px; margin: 0 0 8px; color: var(--accent-ink);
+    border-bottom: 2px solid var(--accent); display: inline-block; padding-bottom: 4px;
+  }
+  .benefit p { margin: 8px 0 0; font-size: 15px; color: var(--text-sub); }
+
+  /* Steps */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 22px;
+  }
+  section.block.alt .step { background: var(--bg); }
+  .step .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: #FFFFFF;
+    width: 32px; height: 32px; border-radius: 50%;
+    font-weight: 700; font-size: 16px; margin-bottom: 10px;
+  }
+  .step h3 { margin: 0 0 6px; font-size: 18px; }
+  .step p { margin: 0; font-size: 15px; color: var(--text-sub); }
+
+  /* Demo placeholder */
+  .demo {
+    background: #1A1A1A;
+    color: #F0F0F0;
+    border-radius: 10px;
+    aspect-ratio: 16 / 9;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center;
+    margin: 8px 0 0;
+    border: 1px solid #333;
+  }
+  .demo .play {
+    width: 64px; height: 64px; border-radius: 50%;
+    border: 3px solid #F0F0F0;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 14px;
+  }
+  .demo .tri {
+    width: 0; height: 0;
+    border-top: 12px solid transparent;
+    border-bottom: 12px solid transparent;
+    border-left: 20px solid #F0F0F0;
+    margin-left: 5px;
+  }
+  .demo .label { font-size: 15px; color: #CCCCCC; }
+  .demo .label small { color: #999999; }
+
+  /* FAQ */
+  .faq { max-width: 800px; }
+  .faq details {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 20px;
+    margin-bottom: 12px;
+  }
+  section.block.alt .faq details { background: var(--bg); }
+  .faq summary {
+    cursor: pointer; font-weight: 700; font-size: 17px;
+    padding: 14px 0; list-style: none;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::before { content: "＋ "; color: var(--accent); font-weight: 700; }
+  .faq details[open] summary::before { content: "－ "; }
+  .faq p { margin: 0 0 16px; color: var(--text-sub); font-size: 15px; }
+
+  /* Final CTA */
+  .final { background: var(--accent-soft); border-top: 1px solid var(--border); }
+  .final h2 { border: none; padding: 0; text-align: center; font-size: 26px; }
+  .final p.body { text-align: center; margin-left: auto; margin-right: auto; }
+  .final .cta-row { justify-content: center; margin-top: 24px; }
+
+  footer { text-align: center; color: var(--text-mute); font-size: 12px; padding: 32px 0 48px; }
+
+  @media (max-width: 720px) {
+    .hero h1 { font-size: 28px; }
+    .hero .sub { font-size: 17px; }
+    .benefits, .steps { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="wrap">
+      <h1>対面会議の議事録を、<br>誰が・何を話したかまで正確に。</h1>
+      <p class="sub">録音中は話者をワンタップ、後処理はAIが文字起こし。人とAIの役割分担で、対面でも「誰の発言か」が崩れません。</p>
+      <div class="cta-row">
+        <a href="#demo" class="btn btn-primary">90秒のデモを見る</a>
+        <a href="#how" class="btn btn-ghost">仕組みを見る</a>
+      </div>
+      <p class="note">一般的なAI議事録が苦手な「対面・複数話者」に絞ったツールです。</p>
+    </div>
+  </header>
+
+  <!-- TRUST -->
+  <div class="trust">
+    <div class="wrap">
+      <p>文字起こしの「後半が消える」「勝手に話が作られる」を、構造で止める設計。実データ検証で、文字化けの残った行を <span class="metric">8行 → 0行</span> に。</p>
+    </div>
+  </div>
+
+  <!-- PROBLEM -->
+  <section class="block">
+    <div class="wrap">
+      <h2>その議事録、本当に「誰が言ったか」合っていますか？</h2>
+      <p class="body">対面の打ち合わせをAIに任せると、よくこうなります。</p>
+      <ul class="pain">
+        <li>発言者が入れ替わる、全部同じ人になる</li>
+        <li>名前や固有名詞が誤変換される</li>
+        <li>長い会議だと後半がごっそり抜ける</li>
+      </ul>
+      <p class="body">結局、聞き直して手直し。それなら最初から手で書いた方が早い——そんな経験はないでしょうか。</p>
+    </div>
+  </section>
+
+  <!-- BENEFITS -->
+  <section class="block alt">
+    <div class="wrap">
+      <h2>人が得意なことは人が、AIが得意なことはAIが。</h2>
+      <div class="benefits">
+        <div class="benefit">
+          <h3>話者が崩れない</h3>
+          <p>録音中に話者をワンタップ記録。「誰が話したか」は人が押さえ、AIは本文に専念します。</p>
+        </div>
+        <div class="benefit">
+          <h3>後半まで欠けない</h3>
+          <p>行の構成は機械が確定。AIには文章の整えだけを任せるので、末尾の取りこぼしが起きにくい設計です。</p>
+        </div>
+        <div class="benefit">
+          <h3>勝手に話を作らない</h3>
+          <p>AIが候補にない言葉を足したら自動で検出・差し戻し。判別できない箇所は「要確認」として残します。</p>
+        </div>
+        <div class="benefit">
+          <h3>そのまま共有できる</h3>
+          <p>文字起こし → 要約 → 残タスク抽出 → Excel出力まで、ひとつの画面で完結します。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="block" id="how">
+    <div class="wrap">
+      <h2>使い方は、いつもの録音とほぼ同じ。</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <h3>録音する</h3>
+          <p>スマホで録音開始。発言者が変わったら話者ボタンをタップするだけ。</p>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <h3>AIが文字起こし</h3>
+          <p>高精度エンジンで本文化。話者情報と突き合わせて自動で整理します。</p>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <h3>確認して使う</h3>
+          <p>画面で見比べ・微修正。要約やタスク抽出、Excel出力まで。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEMO -->
+  <section class="block alt" id="demo">
+    <div class="wrap">
+      <h2 class="center">動かしているところを、90秒で。</h2>
+      <p class="body" style="text-align:center;margin:0 auto 8px;">実際の操作と、出来上がる議事録を確認できます。</p>
+      <div class="demo">
+        <div class="play"><div class="tri"></div></div>
+        <div class="label">デモ動画（準備中）<br><small>※公開後にここへ埋め込みます</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="block">
+    <div class="wrap">
+      <h2>気になるところ</h2>
+      <div class="faq">
+        <details open>
+          <summary>録音データはどこに置かれますか？</summary>
+          <p>専用サーバーに保存し、外部AIに渡すのは文字起こし処理の範囲だけです。各種APIキーは利用者の端末には一切出しません。</p>
+        </details>
+        <details>
+          <summary>話者ボタンを押し忘れたら？</summary>
+          <p>押し忘れても、AIの話者推定や音声解析から補完します。判別できない箇所は「要確認」として明示するので、後から直せます。</p>
+        </details>
+        <details>
+          <summary>オンライン会議でも使えますか？</summary>
+          <p>Zoomのクラウド録画を取り込めます。対面・オンラインどちらも1つの画面で扱えます。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="block final">
+    <div class="wrap">
+      <h2>「誰が・何を」まで残る議事録を、まず90秒のデモで。</h2>
+      <p class="body">実際の操作と、出来上がる議事録を90秒で確認できます。</p>
+      <div class="cta-row">
+        <a href="#demo" class="btn btn-primary">デモ動画を見る</a>
+        <a href="#how" class="btn btn-ghost">仕組みをもう一度見る</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    AIボイスメモ — 対面録音特化のAI議事録 / LPコピー案
+  </footer>
+
+</body>
+</html>
