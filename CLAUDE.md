@@ -171,6 +171,11 @@ merged_transcripts(id, project_id, model, result_json, notes_json, created_at)
 | POST | `/api/projects/{id}/analyze?run=1or2&force=true` | なし | Whisper解析実行 |
 | GET | `/api/projects/{id}/poll` | なし | 解析状態ポーリング（Whisperはスキップ） |
 | POST | `/api/projects/{id}/merge?model=...&w_ws=X&w_run1=Y&w_run2=Z` | Basic | Gemini で重み付き統合（合計10） |
+| POST | `/api/projects/{id}/summarize?model=...` | Basic | 要約＋残タスク生成（Gemini/Claude。要約・Q&A は Claude Haiku 選択可） |
+| POST | `/api/projects/{id}/ask?model=...` | Basic | 文字起こしへの Q&A（`qa_history` に保存） |
+| PATCH | `/api/projects/{id}/merged/speaker` | Basic | LLM最終版の指定行の話者名変更（`{row_idx, speaker}`） |
+| PATCH | `/api/projects/{id}/merged/text` | Basic | LLM最終版の指定行のテキスト編集/クリア（`{row_idx, text}`・空文字許可） |
+| POST | `/api/settings/keys` (PATCH) | Basic | APIキー更新（`{anthropic/whisper/deepgram/gemini: key}`・`.env` 追記）。**変更後は要再起動** |
 | GET | `/api/audio/{id}/{seq}` | Basic | 音声ファイル配信 |
 
 ---
@@ -203,15 +208,19 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 1. **主軸選定（決定論）** — 完了済ソースから最大量1本を選ぶ（`_select_backbone`）。**新デフォルト: `backbone_fixed=run2`（Deepgram主軸＝レコード分離・話者を優先）**
 2. **行構築** — 主軸 + 他ソースを ±`cluster_window_ms` で添付、窓外+低類似度はオーファンとして時系列挿入。ここで行数確定（`_build_rows_with_orphans`）
 3. **話者解決** — `speaker_priority`（`deepgram`/`ws`/`hybrid`）で分岐。**新デフォルト `deepgram`**: 行 ms 近傍の Run2 utterance speaker → 参加者idxマッピング（0=A,1=B,...）→ 未マップは「Speaker X」（`_resolve_speaker_for_row` + `_dg_speaker_at`）
-4. **チャンク分割 LLM 整流（並列）** — `chunk_size` 行ずつ JSONL 出力。LLM は補完・順序修正・句読点整形のみ可、行追加/削除/並べ替えは禁止。プロンプトに「**テキスト本文は Run1（Whisper）候補を最優先採用、Run2 はレコード分離・話者用途**」を明示。重み運用デフォルト **0:7:3**
-5. **強制整合（決定論）** — チャンク失敗 or 行数不一致 → 主軸直採用。候補に無い 4文字以上連続部分文字列を幻覚として上書き＋`note='要確認:LLM過剰補填可能性'`
+4. **チャンク分割 LLM 整流（並列）** — `chunk_size` 行ずつ、入力行 idx ごとに1つの JSON を出力（`{idx, text, note}`）。LLM が行える操作：補完・順序修正・句読点整形・**境界重複トリム(B)**・**文分割(C)**。**行(idx)の追加/削除/統合/並べ替えは禁止**。`_parse_jsonl` は **idx 網羅検証**（1..N を各1個）でゼロ欠落を担保。
+   - **A: テキスト選択（2026-06-07 緩和）** — 旧「Run1 最優先（硬直）」を「**Run1 を基本としつつ、Run1 が明らかに不自然・文意不通なら Run2/WS の同一発話のより自然な候補を採用**」に変更。保守的（明らかな破綻のみ・迷えば Run1）。
+   - **B: 境界重複トリム（2026-06-07）** — 直前/直後行と同一発話の断片が先頭/末尾に重複（漢字変換違い・区切り違い含む）していれば、当該行から重複部分のみトリム。
+   - **C: 文分割（2026-06-07）** — 1行が句読点無しでも明らかに2文以上なら `text` を**配列**にして文単位分割（例 `["絶句してました","それはそうだろう"]`）。分割は再区切りのみ・文字の追加削除禁止。
+   - 重み運用デフォルト **0:7:3**
+5. **強制整合（決定論）** — チャンク失敗 or idx 網羅不一致 → 主軸直採用。`text` 配列は各文を1セグメント化（ts・話者・候補は親行継承）。**幻覚検出は比率ベース（2026-06-07）**：`_detect_hallucination` は「候補連結に無い4文字窓が**過半数（>0.5）**なら過剰補填」と判定（漢字変換・小さな自然化は許容）。**検出時も garbled 主軸には戻さず、LLM テキストを保持して `note='要確認:LLM過剰補填可能性'` を付与**（空出力のみ主軸フォールバック）。
 
 **役割分担（Run2 主軸化の意図）**
 - Run2 (Deepgram) → **レコード分離 + 話者分離**（タイムスタンプ・行の切れ目・Speaker A/B が正確）
 - Run1 (Whisper) → **テキスト本文の精度**（LLM が Run2 行枠内に Run1 テキストを充当）
 - 旧仕様（Run1 主軸 + WS 押下話者）は設定画面で `backbone_fixed=run1`, `speaker_priority=ws`, 重み `1:7:2` に戻せる
 
-**出力形式**: `result_json = [{ts, speaker, text, note, sources?}]`（形状不変・Excel/Q&A/要約は無改修対応）
+**出力形式**: `result_json = [{ts, speaker, text, note, sources?}]`（1セグメントの形状は不変・Excel/Q&A/要約は無改修対応）。**文分割(C)により総セグメント数は主軸行数より増えうる**（分割セグメントは親行の ts・話者を共有）。LLM最終版セルは管理画面で**話者編集**(`PATCH /merged/speaker`)・**テキスト編集/クリア**(`PATCH /merged/text`・▼メニュー)が可能。
 
 **設定パラメータ（`merge_settings` テーブル・設定画面から変更可）**
 | キー | デフォルト | 範囲 |
@@ -257,6 +266,7 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
 - **フォントサイズ**：16px基準・4の倍数のみ（16/20/24/28/32px）
 - **配色**：単色のみ・**グラデーション全面禁止**（CLAUDE.md global rule）。WCAG AAコントラスト遵守
 - **APIキーは絶対クライアントに出さない**：すべてVPSの`.env`管理、FastAPIでプロキシ
+- **⚠ APIキー変更後は `systemctl restart jizo-api` が必須**：uvicorn が `--workers 2` の2プロセス構成のため、管理画面のキー保存（`PATCH /api/settings/keys`）は片方のワーカーのメモリ内グローバルしか更新せず、もう片方が古いキーで 503 を返す（要約は通るが Q&A は503、等の症状）。`.env` には永続化されるので再起動で両ワーカーが揃う
 - **成果物に個人名・法人名を含めない**
 
 ---
@@ -305,8 +315,12 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
   - 設計仕様: `docs/superpowers/specs/2026-06-04-zoom-integration-design.md`
   - **⚠ S2S スコープ制約（2026-06-06）**: 取り込みで `GET /meetings/{uuid}/recordings` を使うと `code 4711`（`cloud_recording:read:list_recording_files` 不足）で 400 になる。この granular scope は **S2S OAuth アプリに付与できない**（Marketplace のスコープ一覧に出ない）。そのため録画取得は **必ず `GET /users/me/recordings` 経由**で行う（`main.py` の `_zoom_fetch_recording_by_uuid()`：付与可能な `cloud_recording:read:list_user_recordings:admin` で叩き、月単位ウィンドウで最大6ヶ月遡って UUID 一致を探す。`recording_files` の `download_url` をそのまま使う）。**`/meetings/{uuid}/recordings` を再導入しないこと。** Zoom 側の必須スコープは `list_user_recordings:admin` / `list_account_recordings:admin` / `recording:admin`（`:master` は不要）。
 
+- ✅ **要約・ToDo抽出・Q&A（Claude Haiku 露出含む）** — 2026-06-07。バックエンド（`_call_claude`/`summarize`/`ask`）・管理画面UI（要約・残タスク・Q&A）は実装済みだった。要約・Q&A専用セレクタ `#summary-model-select` を新設し **Claude Haiku 4.5 を露出**（merge は Gemini 専用維持）。管理画面のAPIキー設定に Anthropic カードを表示（`showOrder` 除外解除）。`POST /summarize` `POST /ask` は任意 model 受理。
+- ✅ **LLM最終版セルの編集・クリア＋生成後セクション折畳** — 2026-06-07。LLM列セルの ▼ メニューから編集モーダル/削除（内容クリア）。`PATCH /merged/text`。生成時に Q&A・Whisper・参考データを自動折畳。
+- ✅ **merge品質改善（A/B/C＋幻覚ガード比率化）** — 2026-06-07。詳細は §LLM統合 Phase4/5。garbled訂正の緩和(A)・境界重複トリム(B)・文分割(C)・反幻覚を比率ベース化し検出時もLLMテキスト保持。実merge検証で garbled残存 8→0 行。
+- ✅ **管理画面バージョン表示** — 2026-06-07。ヘッダ右端 `#app-version`（更新ごとに +0.1）。
+
 ### 未着手（フェーズ3〜4）
-- ⬜ Claude API での要約・ToDo抽出・Q&A（CLAUDE.mdガイドラインでHaiku優先想定）
 - ⬜ 用途別テンプレート（会議・インタビュー・講義）
 - ⬜ Presidio + GiNZA によるPII保護
 - ⬜ プライバシーポリシー整備・公開
