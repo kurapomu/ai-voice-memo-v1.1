@@ -859,8 +859,10 @@ async function resumeRecording() {
     state.timerInterval = setInterval(updateTimer, 1000);
     requestAnimationFrame(animateLevel);
     updateRecUI();
+    logEvent('録音再開');
     toast('録音を再開しました');
   } catch(e) {
+    logEvent('録音再開失敗: ' + (e.message || e));
     toast('録音再開失敗: ' + (e.message || e));
     updateRecStatus();
   }
@@ -1431,6 +1433,7 @@ async function autoSaveToIDB(label = '自動保存') {
     state.lastAutoSaveId = state.lastAutoSaveId || 0;
     state.lastAutoSaveAt = Date.now();
     state.savedLocally = true;
+    logEvent(`${label}（チャンク${state.allAudioBlobs.length}件・IDB保存）`);
     toast(`${label}しました（チャンク${state.allAudioBlobs.length}件）`);
   } catch(e) {
     console.error('autoSaveToIDB failed:', e);
