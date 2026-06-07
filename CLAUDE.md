@@ -301,6 +301,7 @@ UIロジック・録音処理・IndexedDB保存には**一切手を入れない*
   - 主要 API: `GET /api/zoom/cloud-recordings?days=N` / `POST /api/zoom/cloud-recordings/{uuid:path}/import`
   - 他組織主催MTGは「他組織MTGをファイルアップロード」モーダル（既存）で対応
   - 設計仕様: `docs/superpowers/specs/2026-06-04-zoom-integration-design.md`
+  - **⚠ S2S スコープ制約（2026-06-06）**: 取り込みで `GET /meetings/{uuid}/recordings` を使うと `code 4711`（`cloud_recording:read:list_recording_files` 不足）で 400 になる。この granular scope は **S2S OAuth アプリに付与できない**（Marketplace のスコープ一覧に出ない）。そのため録画取得は **必ず `GET /users/me/recordings` 経由**で行う（`main.py` の `_zoom_fetch_recording_by_uuid()`：付与可能な `cloud_recording:read:list_user_recordings:admin` で叩き、月単位ウィンドウで最大6ヶ月遡って UUID 一致を探す。`recording_files` の `download_url` をそのまま使う）。**`/meetings/{uuid}/recordings` を再導入しないこと。** Zoom 側の必須スコープは `list_user_recordings:admin` / `list_account_recordings:admin` / `recording:admin`（`:master` は不要）。
 
 ### 未着手（フェーズ3〜4）
 - ⬜ Claude API での要約・ToDo抽出・Q&A（CLAUDE.mdガイドラインでHaiku優先想定）

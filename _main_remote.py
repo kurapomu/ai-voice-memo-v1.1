@@ -2668,6 +2668,53 @@ async def zoom_import(pending_id: int, _: str = Depends(require_admin)):
     return _zoom_pending_to_project(pending_id)
 
 
+# ── Zoom 連携：UUID から録画 meeting を取得（一覧 API 経由） ─────
+async def _zoom_fetch_recording_by_uuid(uuid: str, months_back: int = 6):
+    """指定 UUID の録画 meeting dict を GET /users/me/recordings から探して返す。
+
+    S2S OAuth アプリでは GET /meetings/{uuid}/recordings が granular scope
+    `cloud_recording:read:list_recording_files(:admin)` を要求するが、この scope は
+    S2S アプリに付与できない（Zoom 仕様・code 4711）。そのため取り込み済 scope
+    `cloud_recording:read:list_user_recordings:admin` で叩ける一覧 API を、
+    月単位ウィンドウ（Zoom の from/to は最大1ヶ月）で遡って検索する。
+    recording_files（download_url 含む）をそのまま返す。見つからなければ None。
+    """
+    tok = await zoom_client.get_access_token()
+    today = datetime.now(timezone.utc).date()
+    async with httpx.AsyncClient(timeout=30) as cli:
+        for i in range(max(1, months_back)):
+            to_d = today - timedelta(days=30 * i)
+            from_d = to_d - timedelta(days=31)
+            page_token = ''
+            while True:
+                params = {
+                    'page_size': 300,
+                    'from': from_d.isoformat(),
+                    'to': to_d.isoformat(),
+                }
+                if page_token:
+                    params['next_page_token'] = page_token
+                r = await cli.get(
+                    'https://api.zoom.us/v2/users/me/recordings',
+                    headers={'Authorization': f'Bearer {tok}'},
+                    params=params,
+                )
+                if r.status_code != 200:
+                    logger.warning(
+                        f'zoom find-recording: list HTTP {r.status_code} '
+                        f'window {from_d}..{to_d}: {r.text[:160]}'
+                    )
+                    break
+                data = r.json()
+                for m in data.get('meetings', []):
+                    if m.get('uuid') == uuid:
+                        return m
+                page_token = data.get('next_page_token') or ''
+                if not page_token:
+                    break
+    return None
+
+
 # ── Zoom 連携：Cloud 録画から取り込み（新フロー・1ステップ） ─────
 @app.post('/api/zoom/cloud-recordings/{uuid:path}/import')
 async def zoom_cloud_import(uuid: str, _: str = Depends(require_admin)):
@@ -2694,24 +2741,20 @@ async def zoom_cloud_import(uuid: str, _: str = Depends(require_admin)):
         }
     conn.close()
 
-    # 2) Zoom API で録画情報を取得（UUID は / や = を含むため2重 URL エンコード）
-    import urllib.parse as _up
-    encoded = _up.quote(_up.quote(uuid, safe=''), safe='')
-    tok = await zoom_client.get_access_token()
+    # 2) Zoom 録画情報を取得（一覧 API 経由）
+    #    GET /meetings/{uuid}/recordings は S2S アプリに付与できない scope を要求するため使わず、
+    #    GET /users/me/recordings（list_user_recordings:admin）から UUID 一致で探す。
     try:
-        async with httpx.AsyncClient(timeout=30) as cli:
-            r = await cli.get(
-                f'https://api.zoom.us/v2/meetings/{encoded}/recordings',
-                headers={'Authorization': f'Bearer {tok}'},
-            )
-        if r.status_code != 200:
-            raise HTTPException(404, f'recording not found in Zoom: HTTP {r.status_code}')
-        meeting = r.json()
-    except HTTPException:
-        raise
+        meeting = await _zoom_fetch_recording_by_uuid(uuid)
     except Exception as e:
         logger.exception(f'zoom cloud-import: Zoom API fetch failed uuid={uuid}: {e}')
         raise HTTPException(502, f'Zoom API error: {e}')
+    if meeting is None:
+        raise HTTPException(
+            404,
+            'recording not found in Zoom user recordings '
+            '(削除済 / 6ヶ月より前 / このアカウント主催でない 可能性)',
+        )
 
     payload = {
         'uuid': uuid,
