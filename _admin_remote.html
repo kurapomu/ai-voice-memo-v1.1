@@ -376,7 +376,7 @@ body.modal-open{overflow:hidden}
     ⚙ 設定
   </button>
   <span id="app-version" title="ファイル更新ごとに加算"
-    style="margin-left:10px;font-size:12px;color:var(--sub);font-family:monospace;white-space:nowrap">v1.0</span>
+    style="margin-left:10px;font-size:12px;color:var(--sub);font-family:monospace;white-space:nowrap">v1.1</span>
 </header>
 
 <div id="layout">
@@ -837,11 +837,15 @@ body.modal-open{overflow:hidden}
 
       <!-- Q&A -->
       <div id="qa-section" style="display:none">
-        <h3>💬 文字起こしへの質問</h3>
-        <div id="qa-history"></div>
-        <div class="qa-input-wrap">
-          <textarea id="qa-input" placeholder="例：要点を3つにまとめて / 〇〇さんの発言だけ抜き出して / 次回までにすべきことは？"></textarea>
-          <button id="btn-ask">質問する</button>
+        <div class="section-header" onclick="toggleSection('qa')">
+          <h3 style="margin-bottom:0">💬 文字起こしへの質問</h3><span class="section-toggle" id="toggle-qa">▼</span>
+        </div>
+        <div id="section-qa" class="section-body">
+          <div id="qa-history"></div>
+          <div class="qa-input-wrap">
+            <textarea id="qa-input" placeholder="例：要点を3つにまとめて / 〇〇さんの発言だけ抜き出して / 次回までにすべきことは？"></textarea>
+            <button id="btn-ask">質問する</button>
+          </div>
         </div>
       </div>
 
@@ -931,6 +935,15 @@ function toggleSection(key) {
   const isOpen  = !body.classList.contains('collapsed');
   body.classList.toggle('collapsed', isOpen);
   toggle.textContent = isOpen ? '▶' : '▼';
+}
+
+// 指定セクションを「閉じる」（折りたたみ）。LLM最終版生成時に補助セクションを畳む用途
+function collapseSection(key) {
+  const body   = document.getElementById(`section-${key}`);
+  const toggle = document.getElementById(`toggle-${key}`);
+  if (!body) return;
+  body.classList.add('collapsed');
+  if (toggle) toggle.textContent = '▶';
 }
 
 // ── ログイン ──
@@ -2721,6 +2734,10 @@ document.getElementById('btn-merge').addEventListener('click', async () => {
     btn.disabled = false;
     await loadProjects();
     await selectProject(id);
+    // LLM最終版生成時：補助セクション（Q&A・Whisper解析・参考データ）を畳む
+    collapseSection('qa');
+    collapseSection('aai');
+    collapseSection('ref');
   } catch(e) {
     statusEl.textContent = `LLM生成失敗: ${e.message}`;
     statusEl.style.color = 'var(--red)';
