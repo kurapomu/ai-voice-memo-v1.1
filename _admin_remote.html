@@ -130,9 +130,29 @@ button:disabled{opacity:.4;cursor:default}
 .speaker-select{font-size:12px;padding:2px 4px;background:var(--bg);color:var(--text);
   border:1px solid var(--border);border-radius:4px}
 .cell-ts{font-size:11px;color:var(--sub)}
-.cell-clear-btn{margin-left:auto;font-size:11px;line-height:1;padding:2px 6px;cursor:pointer;
-  background:#3a1a1a;color:#f87171;border:1px solid #5a2a2a;border-radius:4px}
-.cell-clear-btn:hover{background:#5a2a2a}
+.cell-menu-btn{margin-left:auto;font-size:11px;line-height:1;padding:2px 6px;cursor:pointer;
+  background:var(--surface2);color:var(--sub);border:1px solid var(--border);border-radius:4px}
+.cell-menu-btn:hover{background:var(--surface);color:var(--text)}
+.cell-popup-menu{position:fixed;z-index:1000;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.5);padding:4px;display:flex;flex-direction:column;min-width:130px}
+.cell-popup-menu button{text-align:left;font-size:13px;padding:8px 12px;background:none;border:0;
+  color:var(--text);border-radius:6px;cursor:pointer;white-space:nowrap}
+.cell-popup-menu button:hover{background:var(--surface2)}
+.cell-popup-menu button.danger{color:#f87171}
+.cell-popup-menu button.danger:hover{background:#3a1a1a}
+/* LLMセル編集モーダル */
+#cell-edit-modal{display:none;position:fixed;inset:0;z-index:900;align-items:center;justify-content:center}
+#cell-edit-modal.show{display:flex}
+#cell-edit-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+#cell-edit-box{position:relative;background:var(--surface);border:1px solid var(--purple);
+  border-radius:var(--r);padding:24px;width:min(560px,92vw);z-index:1;display:flex;flex-direction:column;gap:14px}
+#cell-edit-box h3{font-size:16px;font-weight:700;color:var(--purple)}
+#cell-edit-text{width:100%;min-height:140px;background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.6;resize:vertical}
+#cell-edit-actions{display:flex;gap:8px;justify-content:flex-end}
+#cell-edit-actions button{font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;font-weight:600}
+#btn-cell-edit-cancel{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+#btn-cell-edit-save{background:var(--purple);color:#fff;border:0}
 .cell-body{font-size:14px;line-height:1.5;word-break:break-all}
 .cell-empty{color:var(--border);font-size:18px}
 .cell-note-tag{display:block;font-size:11px;color:var(--yellow);
@@ -376,7 +396,7 @@ body.modal-open{overflow:hidden}
     ⚙ 設定
   </button>
   <span id="app-version" title="ファイル更新ごとに加算"
-    style="margin-left:10px;font-size:12px;color:var(--sub);font-family:monospace;white-space:nowrap">v1.1</span>
+    style="margin-left:10px;font-size:12px;color:var(--sub);font-family:monospace;white-space:nowrap">v1.2</span>
 </header>
 
 <div id="layout">
@@ -744,6 +764,19 @@ body.modal-open{overflow:hidden}
         <div class="delete-actions">
           <button id="btn-delete-cancel" onclick="closeDeleteModal()">キャンセル</button>
           <button id="btn-delete-confirm1" onclick="deleteStep2()">削除する</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LLMセル編集モーダル -->
+    <div id="cell-edit-modal">
+      <div id="cell-edit-backdrop" onclick="closeCellEditModal()"></div>
+      <div id="cell-edit-box">
+        <h3>✏ LLM最終版セルを編集</h3>
+        <textarea id="cell-edit-text" placeholder="このセルのテキスト"></textarea>
+        <div id="cell-edit-actions">
+          <button id="btn-cell-edit-cancel" onclick="closeCellEditModal()">キャンセル</button>
+          <button id="btn-cell-edit-save" onclick="saveCellEdit()">保存</button>
         </div>
       </div>
     </div>
@@ -1489,6 +1522,75 @@ async function clearLlmCell(rowIdx) {
   }
 }
 
+// ── LLMセル：▼メニュー（編集／削除の選択） ──
+function _closeCellMenu() {
+  const ex = document.getElementById('cell-popup-menu');
+  if (ex) ex.remove();
+}
+function openCellMenu(event, rowIdx) {
+  event.stopPropagation();
+  _closeCellMenu();
+  const menu = document.createElement('div');
+  menu.id = 'cell-popup-menu';
+  menu.className = 'cell-popup-menu';
+  menu.innerHTML = `
+    <button type="button" data-act="edit">✏ 編集</button>
+    <button type="button" class="danger" data-act="del">🗑 削除（内容を空に）</button>`;
+  document.body.appendChild(menu);
+  // クリック位置に配置（画面外にはみ出さないよう簡易補正）
+  const r = menu.getBoundingClientRect();
+  let x = event.clientX, y = event.clientY;
+  if (x + r.width  > window.innerWidth)  x = window.innerWidth  - r.width  - 8;
+  if (y + r.height > window.innerHeight) y = window.innerHeight - r.height - 8;
+  menu.style.left = Math.max(8, x) + 'px';
+  menu.style.top  = Math.max(8, y) + 'px';
+  menu.querySelector('[data-act="edit"]').onclick = () => { _closeCellMenu(); openCellEditModal(rowIdx); };
+  menu.querySelector('[data-act="del"]').onclick  = () => { _closeCellMenu(); clearLlmCell(rowIdx); };
+  // 次のクリックで閉じる
+  setTimeout(() => document.addEventListener('click', _closeCellMenu, {once: true}), 0);
+}
+
+// ── LLMセル編集モーダル ──
+function openCellEditModal(rowIdx) {
+  if (!currentProject || !currentProject.merged?.result?.[rowIdx]) return;
+  const ta = document.getElementById('cell-edit-text');
+  ta.value = currentProject.merged.result[rowIdx].text || '';
+  document.getElementById('cell-edit-box').dataset.rowIdx = rowIdx;
+  document.getElementById('cell-edit-modal').classList.add('show');
+  document.body.classList.add('modal-open');
+  ta.focus();
+}
+function closeCellEditModal() {
+  document.getElementById('cell-edit-modal').classList.remove('show');
+  document.body.classList.remove('modal-open');
+}
+async function saveCellEdit() {
+  const box = document.getElementById('cell-edit-box');
+  const rowIdx = parseInt(box.dataset.rowIdx, 10);
+  if (!currentProject || !Number.isInteger(rowIdx)) return;
+  const newText = document.getElementById('cell-edit-text').value;
+  const saveBtn = document.getElementById('btn-cell-edit-save');
+  saveBtn.disabled = true;
+  try {
+    const res = await apiFetch(
+      `/api/projects/${currentProject.id}/merged/text`,
+      { method: 'PATCH',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({ row_idx: rowIdx, text: newText }) }
+    );
+    if (!res.ok) throw new Error(await res.text());
+    if (currentProject.merged?.result?.[rowIdx]) {
+      currentProject.merged.result[rowIdx].text = newText;
+    }
+    closeCellEditModal();
+    renderMerged(currentProject);
+  } catch (e) {
+    alert('セルの編集に失敗: ' + e.message);
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
 // ── 録音音声 描画（順序入替・追加ボタン込み） ──
 function renderRecordings(p) {
   const wrap = document.getElementById('audio-players');
@@ -1870,14 +1972,14 @@ function renderMerged(p) {
       const editable = (isLlm && Number.isInteger(s._resultIdx))
         ? ` class="cell-speaker editable" data-row-idx="${s._resultIdx}" onclick="startSpeakerEdit(this)"`
         : ` class="cell-speaker"`;
-      const clearBtn = (isLlm && Number.isInteger(s._resultIdx) && (s.text || '').trim())
-        ? `<button class="cell-clear-btn" title="このセルの内容を空白にする" onclick="clearLlmCell(${s._resultIdx})">✕</button>`
+      const menuBtn = (isLlm && Number.isInteger(s._resultIdx))
+        ? `<button class="cell-menu-btn" title="編集・削除" onclick="openCellMenu(event, ${s._resultIdx})">▼</button>`
         : '';
       return `${sep}
         <div class="cell-meta">
           <span${editable} style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
           ${tsHtml}
-          ${clearBtn}
+          ${menuBtn}
         </div>
         <div class="cell-body">${escHtml(s.text || '')}</div>
         ${noteHtml}`;
