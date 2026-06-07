@@ -396,7 +396,7 @@ body.modal-open{overflow:hidden}
     ⚙ 設定
   </button>
   <span id="app-version" title="ファイル更新ごとに加算"
-    style="margin-left:10px;font-size:12px;color:var(--sub);font-family:monospace;white-space:nowrap">v1.5</span>
+    style="margin-left:10px;font-size:12px;color:var(--sub);font-family:monospace;white-space:nowrap">v1.6</span>
 </header>
 
 <div id="layout">
@@ -849,8 +849,14 @@ body.modal-open{overflow:hidden}
           <h4>⚠ 要確認リスト</h4>
           <div id="notes-body"></div>
         </div>
-        <div id="summary-model-bar" style="display:none;align-items:center;gap:8px;margin:14px 0 6px">
-          <span style="font-size:12px;color:var(--sub);font-weight:600">要約・Q&amp;Aモデル</span>
+        <div id="summary-model-bar" style="display:none;align-items:center;gap:8px;margin:14px 0 6px;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--sub);font-weight:600">用途</span>
+          <select id="summary-template-select" style="font-size:13px;padding:5px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
+            <option value="meeting">会議</option>
+            <option value="interview">インタビュー</option>
+            <option value="lecture">講義</option>
+          </select>
+          <span style="font-size:12px;color:var(--sub);font-weight:600;margin-left:6px">要約・Q&amp;Aモデル</span>
           <select id="summary-model-select" style="font-size:13px;padding:5px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
             <option value="gemini-2.5-flash">Gemini 2.5 Flash（推奨）</option>
             <option value="gemini-2.5-pro">Gemini 2.5 Pro（高品質）</option>
@@ -863,7 +869,7 @@ body.modal-open{overflow:hidden}
           <div id="summary-body"></div>
         </div>
         <div id="tasks-section" style="display:none">
-          <h4>✅ 残タスク</h4>
+          <h4 id="tasks-heading">✅ 残タスク</h4>
           <ul id="tasks-list"></ul>
         </div>
       </div>
@@ -921,6 +927,30 @@ let currentProject = null;
 let pollTimer = null;
 let authHeader = sessionStorage.getItem('admin_auth') || '';
 const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
+// 用途別テンプレート（要約・Q&A のラベル。プロンプト本体はサーバ側 SUMMARY_TEMPLATES）
+const TEMPLATE_LABELS = {
+  meeting:   { name: '会議',         tasksLabel: '残タスク' },
+  interview: { name: 'インタビュー', tasksLabel: 'フォローアップ事項' },
+  lecture:   { name: '講義',         tasksLabel: '学習ポイント' },
+};
+
+// 簡易トースト（画面下中央・数秒で消える）
+function toast(msg, ms = 2500) {
+  let el = document.getElementById('admin-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'admin-toast';
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);'
+      + 'background:#222;color:#f0f0f0;border:1px solid #444;border-radius:8px;'
+      + 'padding:10px 16px;font-size:13px;z-index:1200;max-width:80vw;text-align:center;'
+      + 'box-shadow:0 6px 20px rgba(0,0,0,.5)';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, ms);
+}
 
 function speakerColor(idx) {
   return idx != null ? SPEAKER_COLORS[idx % SPEAKER_COLORS.length] : '#555';
@@ -2079,6 +2109,13 @@ function renderMerged(p) {
   const summaryModelBar = document.getElementById('summary-model-bar');
   if (summaryModelBar) summaryModelBar.style.display = 'flex';
 
+  // 用途テンプレート：project.template でセレクタ・残タスク見出しを復元
+  const tplKey = TEMPLATE_LABELS[p.template] ? p.template : 'meeting';
+  const tplSel = document.getElementById('summary-template-select');
+  if (tplSel) tplSel.value = tplKey;
+  const tasksHeading = document.getElementById('tasks-heading');
+  if (tasksHeading) tasksHeading.textContent = `✅ ${TEMPLATE_LABELS[tplKey].tasksLabel}`;
+
   // 要約
   const summarySec  = document.getElementById('summary-section');
   const summaryBody = document.getElementById('summary-body');
@@ -2904,6 +2941,29 @@ document.getElementById('btn-resummarize').addEventListener('click', async () =>
   } finally {
     btn.disabled = false;
     btn.textContent = orig;
+  }
+});
+
+// ── 用途テンプレート変更（MTGごとに永続） ──
+document.getElementById('summary-template-select').addEventListener('change', async (e) => {
+  const id = currentProjectId;
+  if (!id || !currentProject) return;
+  const tpl = e.target.value;
+  try {
+    const res = await apiFetch(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ template: tpl }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    currentProject.template = tpl;
+    const heading = document.getElementById('tasks-heading');
+    if (heading && TEMPLATE_LABELS[tpl]) heading.textContent = `✅ ${TEMPLATE_LABELS[tpl].tasksLabel}`;
+    toast(`用途を「${TEMPLATE_LABELS[tpl]?.name || tpl}」に変更しました。「🔄要約を再生成」で反映されます`, 3500);
+  } catch(err) {
+    alert('用途の変更に失敗: ' + err.message);
+    // 失敗時はセレクタを元に戻す
+    e.target.value = currentProject.template || 'meeting';
   }
 });
 

@@ -16,7 +16,8 @@ def init_db():
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL DEFAULT '',
             created_at  TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'uploaded'
+            status      TEXT NOT NULL DEFAULT 'uploaded',
+            template    TEXT NOT NULL DEFAULT 'meeting'
         );
 
         CREATE TABLE IF NOT EXISTS participants (
@@ -175,6 +176,8 @@ def init_db():
         "ALTER TABLE projects ADD COLUMN source TEXT NOT NULL DEFAULT 'mobile'",
         # 録音音声 追加・並び替え（v1）
         'ALTER TABLE projects ADD COLUMN recordings_updated_at TEXT',
+        # 用途別テンプレート（会議/インタビュー/講義）
+        "ALTER TABLE projects ADD COLUMN template TEXT NOT NULL DEFAULT 'meeting'",
     ]:
         try:
             conn.execute(sql)

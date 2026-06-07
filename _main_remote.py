@@ -1809,6 +1809,46 @@ async def _call_gemini(system_prompt: str, user_prompt: str, model: str = 'gemin
     return data['choices'][0]['message']['content'].strip()
 
 
+# ── 用途別テンプレート（要約・Q&A のプロンプト文言切替）──────
+SUMMARY_TEMPLATES = {
+    'meeting': {
+        'label': '会議',
+        'tasks_label': '残タスク',
+        'summary_role': 'あなたは日本語会議分析の専門家です。',
+        'summary_focus': '決定事項・議論の流れ・結論',
+        'tasks_focus': '残タスク／アクションアイテムを1つずつ箇条書きで。担当者がいれば「[名前] 〇〇する」形式',
+        'qa_role': 'あなたは会議の議事録から質問に答える専門家です。',
+        'source_label': '会議',
+    },
+    'interview': {
+        'label': 'インタビュー',
+        'tasks_label': 'フォローアップ事項',
+        'summary_role': 'あなたは日本語インタビュー分析の専門家です。',
+        'summary_focus': 'インタビュイーの発言要旨・主要トピック・重要な見解',
+        'tasks_focus': 'フォローアップ事項・追加で確認したい点・深掘りすべきポイントを1つずつ箇条書きで',
+        'qa_role': 'あなたはインタビュー記録から質問に答える専門家です。',
+        'source_label': 'インタビュー',
+    },
+    'lecture': {
+        'label': '講義',
+        'tasks_label': '学習ポイント',
+        'summary_role': 'あなたは日本語講義内容を分析する専門家です。',
+        'summary_focus': '講義の要点・主要概念・結論',
+        'tasks_focus': '学習ポイント・復習すべき項目・重要キーワードを1つずつ箇条書きで',
+        'qa_role': 'あなたは講義内容から質問に答える専門家です。',
+        'source_label': '講義',
+    },
+}
+ALLOWED_TEMPLATES = set(SUMMARY_TEMPLATES.keys())
+
+
+def _project_template(conn, project_id: str) -> dict:
+    """projects.template から該当テンプレ dict を返す（未設定・不正は meeting）。"""
+    row = conn.execute('SELECT template FROM projects WHERE id=?', (project_id,)).fetchone()
+    key = (row['template'] if row and row['template'] else 'meeting')
+    return SUMMARY_TEMPLATES.get(key, SUMMARY_TEMPLATES['meeting'])
+
+
 # ── 要約＋残タスク生成 ──────────────────────────────
 @app.post('/api/projects/{project_id}/summarize')
 async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
@@ -1831,24 +1871,25 @@ async def summarize_project(project_id: str, model: str = 'gemini-2.5-flash',
     lines = [f'{s.get("ts","")} [{s.get("speaker","")}] {s.get("text","")}' for s in result]
     transcript_text = '\n'.join(lines)
 
+    tpl = _project_template(conn, project_id)
     system_prompt = (
-        'あなたは日本語会議分析の専門家です。'
-        '与えられた文字起こしから、要約と残タスクを抽出してください。'
+        f"{tpl['summary_role']}"
+        '与えられた文字起こしから、要約と項目抽出を行ってください。'
     )
-    user_prompt = f"""## 会議の文字起こし
+    user_prompt = f"""## {tpl['source_label']}の文字起こし
 {transcript_text}
 
 ## 出力指示
 以下のJSON形式のみで出力してください（説明文・コードフェンス不要）:
 {{
-  "summary": "200〜400字程度の会議要約（決定事項・議論の流れを含む）",
+  "summary": "200〜400字程度の要約（{tpl['summary_focus']}を含む）",
   "tasks": [
-    "残タスクを1つずつ箇条書きで。担当者がいれば「[名前] 〇〇する」形式",
-    "ない場合は空配列 []"
+    "{tpl['tasks_focus']}",
+    "該当が無い場合は空配列 []"
   ]
 }}"""
 
-    logger.info(f'summarize start project={project_id} model={model}')
+    logger.info(f'summarize start project={project_id} model={model} template={tpl["label"]}')
     raw = await _call_llm(system_prompt, user_prompt, model, max_tokens=2048, project_id=project_id)
 
     # JSON抽出（オブジェクト形式）
@@ -2124,13 +2165,14 @@ async def ask_project(project_id: str, request: Request,
     lines = [f'{s.get("ts","")} [{s.get("speaker","")}] {s.get("text","")}' for s in result]
     transcript_text = '\n'.join(lines) or '（文字起こしなし）'
 
+    tpl = _project_template(conn, project_id)
     system_prompt = (
-        'あなたは会議の議事録から質問に答える専門家です。'
+        f"{tpl['qa_role']}"
         '提供された文字起こしの内容に基づいてのみ回答してください。'
         '推測ではなく、文字起こしに書かれていることだけを根拠にしてください。'
         '不明な場合は「文字起こしには記載がありません」と正直に答えてください。'
     )
-    user_prompt = f"""## 会議の要約
+    user_prompt = f"""## {tpl['source_label']}の要約
 {summary or '（要約未生成）'}
 
 ## 文字起こし全文
@@ -2144,7 +2186,7 @@ async def ask_project(project_id: str, request: Request,
 - 該当する発言があれば「[話者] xxx」と引用する
 - 長くても400字以内"""
 
-    logger.info(f'ask start project={project_id} q_len={len(question)}')
+    logger.info(f'ask start project={project_id} q_len={len(question)} template={tpl["label"]}')
     answer = await _call_llm(system_prompt, user_prompt, model, max_tokens=2048, project_id=project_id)
     logger.info(f'ask OK answer_len={len(answer)}')
 
@@ -2278,6 +2320,14 @@ async def update_project(project_id: str, request: Request, _: str = Depends(req
         conn.execute('UPDATE projects SET name=? WHERE id=?', (body['name'].strip(), project_id))
         conn.commit()
         logger.info(f'Project renamed: {project_id} → {body["name"]}')
+    if 'template' in body:
+        tmpl = (body.get('template') or '').strip()
+        if tmpl not in ALLOWED_TEMPLATES:
+            conn.close()
+            raise HTTPException(400, f'template must be one of: {sorted(ALLOWED_TEMPLATES)}')
+        conn.execute('UPDATE projects SET template=? WHERE id=?', (tmpl, project_id))
+        conn.commit()
+        logger.info(f'Project template set: {project_id} → {tmpl}')
     conn.close()
     return {'ok': True}
 
