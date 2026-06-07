@@ -130,6 +130,9 @@ button:disabled{opacity:.4;cursor:default}
 .speaker-select{font-size:12px;padding:2px 4px;background:var(--bg);color:var(--text);
   border:1px solid var(--border);border-radius:4px}
 .cell-ts{font-size:11px;color:var(--sub)}
+.cell-clear-btn{margin-left:auto;font-size:11px;line-height:1;padding:2px 6px;cursor:pointer;
+  background:#3a1a1a;color:#f87171;border:1px solid #5a2a2a;border-radius:4px}
+.cell-clear-btn:hover{background:#5a2a2a}
 .cell-body{font-size:14px;line-height:1.5;word-break:break-all}
 .cell-empty{color:var(--border);font-size:18px}
 .cell-note-tag{display:block;font-size:11px;color:var(--yellow);
@@ -811,6 +814,15 @@ body.modal-open{overflow:hidden}
           <h4>⚠ 要確認リスト</h4>
           <div id="notes-body"></div>
         </div>
+        <div id="summary-model-bar" style="display:none;align-items:center;gap:8px;margin:14px 0 6px">
+          <span style="font-size:12px;color:var(--sub);font-weight:600">要約・Q&amp;Aモデル</span>
+          <select id="summary-model-select" style="font-size:13px;padding:5px 8px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px">
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash（推奨）</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro（高品質）</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5（要約・Q&amp;A向け）</option>
+          </select>
+          <button id="btn-resummarize" style="font-size:12px;padding:6px 12px;background:var(--purple);color:#fff;border:0;border-radius:6px;cursor:pointer;font-weight:700">🔄 要約を再生成</button>
+        </div>
         <div id="summary-section" style="display:none">
           <h4>📝 要約</h4>
           <div id="summary-body"></div>
@@ -1441,6 +1453,27 @@ async function startSpeakerEdit(el) {
   select.addEventListener('blur', finish);
 }
 
+// ── LLM最終版セルの内容クリア（重複セルの空白化） ──
+async function clearLlmCell(rowIdx) {
+  if (!currentProject || !currentProject.merged) return;
+  if (!confirm('このセルの内容を空白にします。よろしいですか？\n（行・話者・Run1/Run2は残ります。再生成すると元に戻ります）')) return;
+  try {
+    const res = await apiFetch(
+      `/api/projects/${currentProject.id}/merged/text`,
+      { method: 'PATCH',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({ row_idx: rowIdx, text: '' }) }
+    );
+    if (!res.ok) throw new Error(await res.text());
+    if (currentProject.merged?.result?.[rowIdx]) {
+      currentProject.merged.result[rowIdx].text = '';
+    }
+    renderMerged(currentProject);
+  } catch (e) {
+    alert('セルのクリアに失敗: ' + e.message);
+  }
+}
+
 // ── 録音音声 描画（順序入替・追加ボタン込み） ──
 function renderRecordings(p) {
   const wrap = document.getElementById('audio-players');
@@ -1822,10 +1855,14 @@ function renderMerged(p) {
       const editable = (isLlm && Number.isInteger(s._resultIdx))
         ? ` class="cell-speaker editable" data-row-idx="${s._resultIdx}" onclick="startSpeakerEdit(this)"`
         : ` class="cell-speaker"`;
+      const clearBtn = (isLlm && Number.isInteger(s._resultIdx) && (s.text || '').trim())
+        ? `<button class="cell-clear-btn" title="このセルの内容を空白にする" onclick="clearLlmCell(${s._resultIdx})">✕</button>`
+        : '';
       return `${sep}
         <div class="cell-meta">
           <span${editable} style="color:${s.color || 'var(--sub)'}">${escHtml(s.speaker || '')}</span>
           ${tsHtml}
+          ${clearBtn}
         </div>
         <div class="cell-body">${escHtml(s.text || '')}</div>
         ${noteHtml}`;
@@ -1920,6 +1957,10 @@ function renderMerged(p) {
   } else {
     notesSummary.style.display = 'none';
   }
+
+  // 要約・Q&Aモデル選択バー（merged があれば常時表示）
+  const summaryModelBar = document.getElementById('summary-model-bar');
+  if (summaryModelBar) summaryModelBar.style.display = 'flex';
 
   // 要約
   const summarySec  = document.getElementById('summary-section');
@@ -2659,9 +2700,10 @@ document.getElementById('btn-merge').addEventListener('click', async () => {
     const d = await res.json();
     statusEl.textContent = `生成完了（${d.segments}発言、要確認${d.notes}件）。要約とタスクを抽出中…`;
 
-    // 続けて要約＋タスク抽出
+    // 続けて要約＋タスク抽出（要約・Q&Aモデルは merge とは別セレクタ）
     try {
-      const r2 = await apiFetch(`/api/projects/${id}/summarize?model=${encodeURIComponent(model)}`, {method: 'POST'});
+      const summaryModel = document.getElementById('summary-model-select')?.value || model;
+      const r2 = await apiFetch(`/api/projects/${id}/summarize?model=${encodeURIComponent(summaryModel)}`, {method: 'POST'});
       if (r2.ok) {
         const s = await r2.json();
         statusEl.textContent = `生成完了（要約${s.summary.length}字・残タスク${s.tasks.length}件）`;
@@ -2692,7 +2734,7 @@ document.getElementById('btn-ask').addEventListener('click', async () => {
   const input = document.getElementById('qa-input');
   const question = input.value.trim();
   if (!question) return;
-  const model = document.getElementById('model-select').value;
+  const model = document.getElementById('summary-model-select').value;
   const btn = document.getElementById('btn-ask');
   btn.disabled = true;
   btn.textContent = '考え中…';
@@ -2717,6 +2759,30 @@ document.getElementById('btn-ask').addEventListener('click', async () => {
 document.getElementById('qa-input').addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     document.getElementById('btn-ask').click();
+  }
+});
+
+// ── 要約を再生成（要約・Q&Aモデルで） ──
+document.getElementById('btn-resummarize').addEventListener('click', async () => {
+  const id = currentProjectId;
+  if (!id || !currentProject || !currentProject.merged) {
+    alert('先に LLM 最終版を生成してください');
+    return;
+  }
+  const model = document.getElementById('summary-model-select').value;
+  const btn = document.getElementById('btn-resummarize');
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '要約生成中…';
+  try {
+    const res = await apiFetch(`/api/projects/${id}/summarize?model=${encodeURIComponent(model)}`, {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    await selectProject(id);
+  } catch(e) {
+    alert('要約の再生成に失敗: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
   }
 });
 

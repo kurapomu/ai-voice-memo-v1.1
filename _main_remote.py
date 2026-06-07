@@ -1303,6 +1303,10 @@ def _build_chunk_prompt(chunk: dict, plist: str, w_ws: int, w_run1: int, w_run2:
         '1. 主軸が拾い損ねた単語の補完\n'
         '2. 主軸内で明らかに順序が崩れた語句の修正\n'
         '3. 句読点とスペースの整形\n'
+        '4. 隣接レコード境界の重複除去：直前/直後の行（「文脈」に表示済み）と同一発話の断片が'
+        '当該行の先頭または末尾に重複している場合（漢字変換違い・区切り違い・送り仮名違いを含む同一発話）、'
+        '当該行から重複部分のみをトリムして自然な境界にする。'
+        '明確な重複のみトリムし、別発話か判断に迷う場合は残す。\n'
         '\n'
         '絶対禁止事項：\n'
         '- 行の追加・削除・統合・分割・並べ替え\n'
@@ -1874,6 +1878,59 @@ async def update_merged_speaker(project_id: str, request: Request,
     )
     return {'ok': True, 'row_idx': row_idx,
             'old_speaker': old_speaker, 'new_speaker': new_speaker}
+
+
+# ── LLM最終版トランスクリプト：レコードのテキスト更新（内容クリア用） ──────
+@app.patch('/api/projects/{project_id}/merged/text')
+async def update_merged_text(project_id: str, request: Request,
+                             _: str = Depends(require_admin)):
+    """LLM最終版トランスクリプトの指定行のテキストを更新する（空文字＝内容クリア）。
+    body: {"row_idx": int, "text": str}
+    speaker 編集と違い空文字を許可する（重複セルのクリアが目的）。
+    行・ts・話者は保持し、Run1/Run2/WS 等の別ソースには影響しない。
+    """
+    body = await request.json()
+    row_idx = body.get('row_idx')
+    new_text = body.get('text')
+    if not isinstance(row_idx, int) or row_idx < 0:
+        raise HTTPException(400, 'row_idx required (non-negative int)')
+    if not isinstance(new_text, str):
+        raise HTTPException(400, 'text required (str)')
+
+    conn = get_conn()
+    merged = conn.execute(
+        'SELECT id, result_json FROM merged_transcripts '
+        'WHERE project_id=? ORDER BY id DESC LIMIT 1',
+        (project_id,),
+    ).fetchone()
+    if not merged:
+        conn.close()
+        raise HTTPException(404, 'merged transcript not found')
+
+    try:
+        rows = json.loads(merged['result_json']) if merged['result_json'] else []
+    except Exception:
+        conn.close()
+        raise HTTPException(500, 'result_json parse error')
+
+    if row_idx >= len(rows):
+        conn.close()
+        raise HTTPException(400, f'row_idx out of range: {row_idx} >= {len(rows)}')
+
+    old_text = rows[row_idx].get('text', '')
+    rows[row_idx]['text'] = new_text
+
+    conn.execute(
+        'UPDATE merged_transcripts SET result_json=? WHERE id=?',
+        (json.dumps(rows, ensure_ascii=False), merged['id']),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(
+        f'merged text update: project={project_id} row={row_idx} '
+        f'len {len(old_text)} -> {len(new_text)}'
+    )
+    return {'ok': True, 'row_idx': row_idx, 'text': new_text}
 
 
 # ── Excel エクスポート（管理画面のタイムライン4カラムビューをそのまま書出） ──
