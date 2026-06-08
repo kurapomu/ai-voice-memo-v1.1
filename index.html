@@ -322,7 +322,7 @@ audio{width:100%;height:40px}
       </a>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
         <span id="rec-timer">00:00</span>
-        <span id="rec-remaining" style="font-size:12px;color:var(--sub)">残り 20:00</span>
+        <span id="rec-remaining" style="font-size:12px;color:var(--sub)">次の自動保存まで 15:00</span>
       </div>
     </div>
   </div>
@@ -394,8 +394,9 @@ audio{width:100%;height:40px}
 // 定数・色パレット
 // ══════════════════════════════════════
 const SPEAKER_COLORS = ['#3b82f6','#22c55e','#f59e0b','#e879f9','#f87171'];
-const MAX_REC_MS = 20 * 60 * 1000;  // 1チャンクあたりの最大録音時間 20分
-const DB_NAME = 'VoiceMemo', DB_VER = 1, STORE = 'recordings';
+const CHUNK_MS = 15 * 60 * 1000;     // 1チャンク=15分ごとに自動分割アップロード
+const MAX_TOTAL_MS = 60 * 60 * 1000; // MTG全体の上限60分（=15分×4）で自動完了
+const DB_NAME = 'VoiceMemo', DB_VER = 2, STORE = 'recordings';
 const TTL_MS = 24 * 60 * 60 * 1000;  // IndexedDB 24時間TTL
 
 const BITRATE_OPTIONS = [
@@ -475,7 +476,16 @@ const state = {
   uploadedToVps: false,  // VPSアップロード済み
   speakerEvents: [],     // 話者ボタン押下イベント {ts, ms, speaker_idx, speaker_name}
   startTime: null,
-  chunkStartTime: null,  // 現在チャンクの開始時刻（20分制限の起点）
+  chunkStartTime: null,  // 現在チャンクの開始時刻（15分分割の起点）
+  // ── 15分自動分割アップロード / 同一MTG追記 ──
+  projectId: null,            // 初回送信でサーバーから受領・以降の追記先
+  sentSegmentCount: 0,        // 送信済み ref_segments 件数（差分送信の起点）
+  sentSpeakerEventCount: 0,   // 送信済み speaker_events 件数
+  chunkSeq: 0,                // 現在録音中チャンクの通し番号（0始まり）
+  isUploadingChunk: false,    // 二重送信ガード
+  pendingFlush: false,        // 送信中に次の15分境界が来た場合の予約
+  unsentChunk: false,         // 直前チャンクが未送信（直列化ガード用）
+  inprogressTimer: null,      // 進行中チャンクの中間IDB保存タイマー
   lastSttAt: null,       // 最後にSTT結果が届いた時刻
   sttWarnDismissedAt: null,  // 確認バナーをユーザーが閉じた時刻
   timerInterval: null,
@@ -723,14 +733,26 @@ async function startRecording() {
   stt.start();
   state.stt = stt;
 
-  // 状態更新
+  // 状態更新（新しいMTGとして開始＝同一MTG追記用の状態をリセット）
   state.isRecording = true;
   state.isPaused = false;
   state.segments = [];
+  state.speakerEvents = [];
+  state.allAudioBlobs = [];
+  state.projectId = null;
+  state.sentSegmentCount = 0;
+  state.sentSpeakerEventCount = 0;
+  state.chunkSeq = 0;
+  state.isUploadingChunk = false;
+  state.pendingFlush = false;
+  state.unsentChunk = false;
+  state.uploadedToVps = false;
+  localStorage.removeItem('active_project_id');
   state.startTime = Date.now();
   state.chunkStartTime = Date.now();
   state.lastSttAt = Date.now();
   state.timerInterval = setInterval(updateTimer, 1000);
+  startInprogressBackup();  // 進行中チャンクの中間IDB保存（クラッシュ耐性）
 
   // レベルバー
   $('level-bar').classList.add('active');
@@ -784,6 +806,7 @@ function pauseRecording() {
   state.isRecording = false;
   clearInterval(state.timerInterval);
   clearTimeout(state.restartTimer);
+  stopInprogressBackup();
   $('level-bar').classList.remove('active');
   $('level-fill').style.width = '0%';
   try { state.stt?.stop(); } catch(e) {}
@@ -791,17 +814,21 @@ function pauseRecording() {
   state.mediaRecorder.onstop = async () => {
     const mime = state.mediaRecorder.mimeType || 'audio/webm';
     const blob = new Blob(state.audioChunks, {type: mime});
-    if (blob.size > 0) {
-      state.allAudioBlobs.push({blob, mime});
+    state.audioChunks = [];
+    if (blob && blob.size > 0) {
+      // 手動一時停止でもチャンクを確定→送信（同一MTGに追記）
+      const chunk = {blob, mime, seq: state.chunkSeq};
+      state.chunkSeq++;
+      state.allAudioBlobs.push(chunk);
+      const idbId = await saveChunkToIDB(chunk);
+      await clearInprogressIDB();
+      await uploadOneChunk(chunk, idbId);
     } else {
       console.warn('pauseRecording: empty chunk skipped');
       toast('録音データなし（チャンクスキップ）', 2000);
     }
-    state.audioChunks = [];
     updateRecUI();
-    toast(`一時停止しました（チャンク${state.allAudioBlobs.length}件）`);
-    // データロスト防止：一時停止時に自動IDB保存
-    await autoSaveToIDB('自動保存');
+    toast(`一時停止しました（送信済み${state.chunkSeq}チャンク）`);
   };
   state.mediaRecorder.stop();
   state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
@@ -854,9 +881,10 @@ async function resumeRecording() {
     if (!state.startTime) state.startTime = Date.now();
     state.chunkStartTime = Date.now();
     state.lastSttAt = Date.now();
-    $('rec-remaining').textContent = '残り 20:00';
+    $('rec-remaining').textContent = '次の自動保存まで 15:00';
     $('rec-remaining').style.color = 'var(--sub)';
     state.timerInterval = setInterval(updateTimer, 1000);
+    startInprogressBackup();
     requestAnimationFrame(animateLevel);
     updateRecUI();
     logEvent('録音再開');
@@ -866,6 +894,155 @@ async function resumeRecording() {
     toast('録音再開失敗: ' + (e.message || e));
     updateRecStatus();
   }
+}
+
+// ══════════════════════════════════════
+// 15分自動分割アップロード（無停止）＋同一MTG追記
+// ══════════════════════════════════════
+
+// MTG名取得（入力欄が空なら日付ベース）
+function getMeetingName() {
+  return ($('mtg-name-input').value.trim()) ||
+    ('MTG ' + new Date().toLocaleDateString('ja-JP', {year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'-'));
+}
+
+// 現MediaRecorderを停止してBlobを取り出す（録音は別途再開する前提）
+function stopCurrentRecorderAndGetBlob() {
+  return new Promise(resolve => {
+    const mr = state.mediaRecorder;
+    if (!mr) { resolve(null); return; }
+    mr.onstop = () => {
+      const mime = mr.mimeType || 'audio/webm';
+      const blob = new Blob(state.audioChunks, {type: mime});
+      resolve(blob && blob.size > 0 ? {blob, mime} : null);
+    };
+    try {
+      mr.stop();
+      mr.stream.getTracks().forEach(t => t.stop());
+    } catch(e) { console.error('stopCurrentRecorder failed:', e); resolve(null); }
+  });
+}
+
+// 新しいMediaRecorderで録音を継続開始（STTは触らない＝segmentsは連続）
+async function startNewRecorder() {
+  const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : 'audio/webm';
+  const mr = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: getAudioBitrate()});
+  state.audioChunks = [];
+  mr.ondataavailable = e => { if (e.data.size > 0) state.audioChunks.push(e.data); };
+  mr.start(1000);
+  state.mediaRecorder = mr;
+  state.chunkStartTime = Date.now();
+}
+
+// 15分境界：現チャンクを確定→送信し、録音は止めずに次チャンクへ
+async function rotateAndUploadChunk() {
+  if (!state.isRecording || state.isPaused) return;
+  if (state.isUploadingChunk) { state.pendingFlush = true; return; }
+  let captured;
+  try {
+    captured = await stopCurrentRecorderAndGetBlob();
+    await startNewRecorder();   // 無停止で次チャンク開始（マイクは再取得）
+  } catch(e) {
+    logEvent('チャンク区切り失敗: ' + (e.message || e));
+    try { await startNewRecorder(); } catch(_) {}
+    return;
+  }
+  if (!captured) return;        // 空チャンクはスキップ
+  const chunk = {blob: captured.blob, mime: captured.mime, seq: state.chunkSeq};
+  state.chunkSeq++;
+  state.allAudioBlobs.push(chunk);
+  updateRecUI();
+  const idbId = await saveChunkToIDB(chunk);
+  await clearInprogressIDB();
+  await uploadOneChunk(chunk, idbId);
+  if (state.pendingFlush) { state.pendingFlush = false; rotateAndUploadChunk(); }
+}
+
+// チャンク送信（初回=新規作成 / 2回目以降=同一MTGへ追記）
+async function uploadOneChunk(chunk, idbId) {
+  // 直列化ガード：前チャンクが未送信なら送らず起動時再送に委ねる（差分二重送り・別MTG二重作成を防止）
+  if (state.unsentChunk) {
+    logEvent(`チャンク${chunk.seq + 1}は前チャンク未送信のため保留（次回起動で再送）`);
+    return;
+  }
+  state.isUploadingChunk = true;
+  const allSeg = state.segments.filter(s => !s.isInterim)
+    .map(s => ({text: s.text, speakerIdx: s.speakerIdx, ts: s.ts, highlight: s.highlight}));
+  const segDelta = allSeg.slice(state.sentSegmentCount);
+  const evDelta  = state.speakerEvents.slice(state.sentSpeakerEventCount);
+  try {
+    const fd = new FormData();
+    if (!state.projectId) {
+      // 初回：新規MTG作成
+      fd.append('meta', JSON.stringify({
+        name: getMeetingName(),
+        participants: [...state.participants],
+        segments: segDelta,
+        speaker_events: evDelta,
+      }));
+      fd.append('audio', chunk.blob, `rec_${chunk.seq}.webm`);
+      const res = await fetch(`${API_BASE}/api/projects`, {method: 'POST', body: fd});
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.projectId = data.project_id;
+      localStorage.setItem('active_project_id', state.projectId);
+      logEvent(`MTG作成 project_id=${state.projectId}（チャンク${chunk.seq + 1}）`);
+    } else {
+      // 2回目以降：同一MTGへ追記
+      fd.append('meta', JSON.stringify({segments: segDelta, speaker_events: evDelta}));
+      fd.append('audio', chunk.blob, `rec_${chunk.seq}.webm`);
+      const res = await fetch(`${API_BASE}/api/projects/${state.projectId}/chunks`, {method: 'POST', body: fd});
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      logEvent(`チャンク${chunk.seq + 1}を追記 project_id=${state.projectId}`);
+    }
+    // 成功時のみカウンタ前進＋IDBを送信済みに
+    state.sentSegmentCount += segDelta.length;
+    state.sentSpeakerEventCount += evDelta.length;
+    state.unsentChunk = false;
+    if (idbId != null) await markChunkSentInIDB(idbId, state.projectId);
+    toast(`チャンク${chunk.seq + 1}を送信しました`);
+  } catch(e) {
+    state.unsentChunk = true;   // 以降は起動時再送に委ねる
+    logEvent('チャンク送信失敗: ' + (e.message || e));
+    toast('送信失敗（次回起動時に再送します）', 3000);
+  } finally {
+    state.isUploadingChunk = false;
+  }
+}
+
+// MTG完了（60分到達 or「保存して完了」共通）：最終チャンクを送信して締める
+async function finishMeeting() {
+  const wasRecording = state.isRecording;
+  state.isRecording = false;
+  state.isPaused = false;
+  clearInterval(state.timerInterval);
+  clearTimeout(state.restartTimer);
+  stopInprogressBackup();
+  const lvl = $('level-bar'); if (lvl) lvl.classList.remove('active');
+  const lf = $('level-fill'); if (lf) lf.style.width = '0%';
+  try { state.stt?.stop(); } catch(e) {}
+
+  if (wasRecording && state.mediaRecorder) {
+    const captured = await stopCurrentRecorderAndGetBlob();
+    if (captured) {
+      const chunk = {blob: captured.blob, mime: captured.mime, seq: state.chunkSeq};
+      state.chunkSeq++;
+      state.allAudioBlobs.push(chunk);
+      const idbId = await saveChunkToIDB(chunk);
+      await clearInprogressIDB();
+      await uploadOneChunk(chunk, idbId);
+    }
+  }
+  await clearInprogressIDB();
+  finalizeSegments();
+  if (state.allAudioBlobs.length > 0) {
+    state.audioBlob = state.allAudioBlobs[state.allAudioBlobs.length - 1].blob;
+    state.audioUrl = URL.createObjectURL(state.audioBlob);
+  }
+  state.uploadedToVps = true;
+  updateRecStatus();
 }
 
 // ══════════════════════════════════════
@@ -1004,9 +1181,8 @@ const ADMIN_URL = '/ai-voice-memo/admin/';
 
 async function completeAndUpload() {
   const btn = $('btn-complete-rec');
-  // 送信済み：再押下は管理画面遷移（beforeunload警告抑止のためフラグクリア）
-  if (state.uploadedToVps) {
-    state.isRecording = false;
+  // 送信完了済み・録音停止中：再押下は管理画面遷移（beforeunload警告抑止のためフラグクリア）
+  if (state.uploadedToVps && !state.isRecording) {
     state.isPaused = false;
     location.href = ADMIN_URL;
     return;
@@ -1014,67 +1190,27 @@ async function completeAndUpload() {
   btn.disabled = true;
   btn.textContent = '保存処理中…';
 
-  // 録音中ならまず停止してチャンク確定
-  if (state.isRecording) {
-    await new Promise(resolve => {
-      const oldOnstop = state.mediaRecorder.onstop;
-      state.mediaRecorder.onstop = () => {
-        const mime = state.mediaRecorder.mimeType || 'audio/webm';
-        const blob = new Blob(state.audioChunks, {type: mime});
-        state.allAudioBlobs.push({blob, mime});
-        resolve();
-      };
-      state.mediaRecorder.stop();
-      state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
-    });
-    state.isRecording = false;
-    clearInterval(state.timerInterval);
-    try { state.stt?.stop(); } catch(e) {}
-  }
+  // 録音停止＋最終チャンク送信（既に15分ごとに分割送信済み・残りを締める）
+  await finishMeeting();
 
-  if (state.allAudioBlobs.length === 0) {
+  if (state.allAudioBlobs.length === 0 && !state.projectId) {
     btn.disabled = false;
     btn.textContent = '保存して完了 →';
+    state.uploadedToVps = false;
     toast('録音データがありません');
     return;
   }
 
-  finalizeSegments();
-  state.audioBlob = state.allAudioBlobs[state.allAudioBlobs.length - 1].blob;
-  state.audioUrl  = URL.createObjectURL(state.audioBlob);
-
-  btn.textContent = 'アップロード中…';
-  try {
-    const fd = new FormData();
-    const meta = {
-      name: ($('mtg-name-input').value.trim()) ||
-            ('MTG ' + new Date().toLocaleDateString('ja-JP', {year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'-')),
-      participants: [...state.participants],
-      segments: state.segments
-        .filter(s => !s.isInterim)
-        .map(s => ({text: s.text, speakerIdx: s.speakerIdx, ts: s.ts, highlight: s.highlight})),
-      speaker_events: state.speakerEvents,  // 話者ボタン押下のタイムスタンプ列
-    };
-    fd.append('meta', JSON.stringify(meta));
-    const uploadBlobs = state.allAudioBlobs.filter(({blob}) => blob && blob.size > 0);
-    uploadBlobs.forEach(({blob}, i) => fd.append('audio', blob, `rec_${i}.webm`));
-
-    const res = await fetch(`${API_BASE}/api/projects`, {method:'POST', body: fd});
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    state.uploadedToVps = true;
-    logEvent(`VPSアップロード成功 project_id=${data.project_id} chunks=${state.allAudioBlobs.length}`);
-    updateRecStatus();  // ヘッダーバッジを「✓ 送信完了」に更新
-    toast(`✅ 完了しました（${state.allAudioBlobs.length}件アップロード）。PCの管理画面で解析・確認してください`, 4000);
-    // モバイルは管理画面に遷移しない。録音と話者選択のみ
-    const btn = $('btn-complete-rec');
-    btn.disabled = false;
+  btn.disabled = false;
+  if (state.unsentChunk) {
+    // 一部送信失敗。IDBに残置済み→次回起動で再送
     btn.textContent = '📊 管理画面で確認 →';
-  } catch(e) {
-    btn.disabled = false;
-    btn.textContent = '保存して完了 →';
-    logEvent('VPSアップロード失敗: ' + e.message);
-    toast('アップロード失敗: ' + e.message, 3000);
+    logEvent(`MTG完了（一部未送信） project_id=${state.projectId} chunks=${state.chunkSeq}`);
+    toast('一部の送信に失敗しました。次回アプリ起動時に自動で再送します', 4000);
+  } else {
+    btn.textContent = '📊 管理画面で確認 →';
+    logEvent(`MTG完了 project_id=${state.projectId} chunks=${state.chunkSeq}`);
+    toast(`✅ 完了しました（${state.chunkSeq}チャンク）。PCの管理画面で解析・確認してください`, 4000);
   }
 }
 
@@ -1221,20 +1357,26 @@ function updateTimer() {
   if (Math.floor((Date.now() - (state.startTime || 0)) / 1000) % 5 === 0) {
     updateRecStatus();
   }
-  const chunkBase = state.chunkStartTime || state.startTime;
-  const remainMs = MAX_REC_MS - (Date.now() - chunkBase);
-  if (remainMs <= 0) {
-    pauseRecording();
-    toast('20分に達したため自動保存しました。続きを録音するには「録音を再開」を押してください。', 6000);
+  // ① 全体60分上限 → 自動完了（サーバー送信して締める）
+  if (state.startTime && (Date.now() - state.startTime) >= MAX_TOTAL_MS) {
+    toast('60分に達したため録音を終了し保存しました', 5000);
+    finishMeeting();
     return;
   }
+  // ② 15分チャンク境界 → 無停止で分割送信（録音は継続）
+  const chunkBase = state.chunkStartTime || state.startTime;
+  if ((Date.now() - chunkBase) >= CHUNK_MS) {
+    rotateAndUploadChunk();   // chunkStartTime は startNewRecorder 内でリセット
+    return;
+  }
+  // 残り時間表示（現チャンクの15分基準）
+  const remainMs = CHUNK_MS - (Date.now() - chunkBase);
   const s = Math.ceil(remainMs / 1000);
   const mm = String(Math.floor(s / 60)).padStart(2, '0');
   const ss = String(s % 60).padStart(2, '0');
   const el = $('rec-remaining');
-  el.textContent = `残り ${mm}:${ss}`;
-  el.style.color = s <= 60 ? 'var(--red)' : s <= 300 ? 'var(--yellow)' : 'var(--sub)';
-  if (s === 300) toast('⚠ 残り5分です', 4000);
+  el.textContent = `次の自動保存まで ${mm}:${ss}`;
+  el.style.color = s <= 60 ? 'var(--red)' : s <= 180 ? 'var(--yellow)' : 'var(--sub)';
 }
 function animateLevel() {
   if (!state.isRecording) return;
@@ -1441,6 +1583,183 @@ async function autoSaveToIDB(label = '自動保存') {
   }
 }
 
+// ══════════════════════════════════════
+// 15分分割アップロード用 IDB（クラッシュ耐性・未送信の再送）
+// ══════════════════════════════════════
+const INPROGRESS_ID = 'inprogress';  // 進行中チャンクの中間保存（固定キーで上書き）
+
+async function idbDelete(id) {
+  const db = await openDB();
+  const tx = db.transaction(STORE, 'readwrite');
+  tx.objectStore(STORE).delete(id);
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+}
+
+// 確定チャンクを「未送信」としてIDBへ保存。送信前に呼ぶ＝クラッシュしても残る
+async function saveChunkToIDB(chunk) {
+  try {
+    const buf = await chunk.blob.arrayBuffer();
+    const allSeg = state.segments.filter(s => !s.isInterim).map(s => ({...s}));
+    const db = await openDB();
+    const record = {
+      createdAt: new Date().toISOString(),
+      duration: getElapsed(),
+      participants: [...state.participants],
+      meetingName: getMeetingName(),
+      segmentsSnapshot: allSeg,                       // この時点の全確定セグメント
+      speakerEventsSnapshot: [...state.speakerEvents],
+      sentSegmentCount: state.sentSegmentCount,       // このチャンクの差分起点
+      sentSpeakerEventCount: state.sentSpeakerEventCount,
+      audioMime: chunk.mime,
+      audioData: buf,
+      projectId: state.projectId,
+      chunkSeq: chunk.seq,
+      kind: 'chunk',
+      sent: false,
+    };
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).add(record);
+    const id = await new Promise((res, rej) => {
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+    state.savedLocally = true;
+    return id;
+  } catch(e) {
+    console.error('saveChunkToIDB failed:', e);
+    return null;
+  }
+}
+
+// 送信成功したチャンクは削除（容量・プライバシー：送信済みは残さない）
+async function markChunkSentInIDB(id, _projectId) {
+  try { await idbDelete(id); }
+  catch(e) { console.error('markChunkSentInIDB failed:', e); }
+}
+
+// 進行中チャンクの中間バックアップ（30秒ごと・固定キー上書き）
+function startInprogressBackup() {
+  stopInprogressBackup();
+  state.inprogressTimer = setInterval(saveInprogressToIDB, 30000);
+}
+function stopInprogressBackup() {
+  if (state.inprogressTimer) { clearInterval(state.inprogressTimer); state.inprogressTimer = null; }
+}
+async function clearInprogressIDB() {
+  try { await idbDelete(INPROGRESS_ID); } catch(e) {}
+}
+async function saveInprogressToIDB() {
+  try {
+    if (!state.isRecording || state.isPaused) return;
+    if (!state.audioChunks || state.audioChunks.length === 0) return;
+    const mime = state.mediaRecorder?.mimeType || 'audio/webm';
+    const blob = new Blob(state.audioChunks, {type: mime});
+    if (!blob || blob.size === 0) return;
+    const buf = await blob.arrayBuffer();
+    const allSeg = state.segments.filter(s => !s.isInterim).map(s => ({...s}));
+    const db = await openDB();
+    const record = {
+      id: INPROGRESS_ID,
+      createdAt: new Date().toISOString(),
+      duration: getElapsed(),
+      participants: [...state.participants],
+      meetingName: getMeetingName(),
+      segmentsSnapshot: allSeg,
+      speakerEventsSnapshot: [...state.speakerEvents],
+      sentSegmentCount: state.sentSegmentCount,
+      sentSpeakerEventCount: state.sentSpeakerEventCount,
+      audioMime: mime,
+      audioData: buf,
+      projectId: state.projectId,
+      chunkSeq: state.chunkSeq,
+      kind: 'inprogress',
+      sent: false,
+    };
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(record);   // 固定キーで上書き
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch(e) { console.error('saveInprogressToIDB failed:', e); }
+}
+
+// 起動時：IDBに残る未送信チャンクをサーバーへ再送（クラッシュ復旧）
+async function recoverUnsentChunks() {
+  try {
+    const db = await openDB();
+    const all = await new Promise((res, rej) => {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).getAll();
+      req.onsuccess = () => res(req.result || []);
+      req.onerror = () => rej(req.error);
+    });
+    const unsent = all.filter(r =>
+      (r.kind === 'chunk' || r.kind === 'inprogress') && r.sent === false && r.audioData);
+    if (unsent.length === 0) return;
+
+    // projectId ごとにグループ化（'__new__' は未作成）
+    const groups = {};
+    for (const r of unsent) {
+      const key = r.projectId || '__new__';
+      (groups[key] = groups[key] || []).push(r);
+    }
+    const total = unsent.length;
+    let done = 0, failed = 0;
+    toast(`未送信の録音 ${total} 件を再送します`, 3000);
+    logEvent(`起動時再送開始: ${total}件`);
+
+    for (const key of Object.keys(groups)) {
+      const list = groups[key].sort((a, b) => (a.chunkSeq || 0) - (b.chunkSeq || 0));
+      let projectId = (key === '__new__') ? null : key;
+      // セグメント/イベントはグループで1回だけ送る（差分二重送り防止）
+      const last = list[list.length - 1];
+      const baseSeg = list[0].sentSegmentCount || 0;
+      const baseEv  = list[0].sentSpeakerEventCount || 0;
+      const segToSend = (last.segmentsSnapshot || [])
+        .filter(s => !s.isInterim)
+        .map(s => ({text: s.text, speakerIdx: s.speakerIdx, ts: s.ts, highlight: s.highlight}))
+        .slice(baseSeg);
+      const evToSend = (last.speakerEventsSnapshot || []).slice(baseEv);
+      let first = true;
+      for (const rec of list) {
+        const blob = new Blob([rec.audioData], {type: rec.audioMime || 'audio/webm'});
+        try {
+          const fd = new FormData();
+          if (!projectId) {
+            fd.append('meta', JSON.stringify({
+              name: rec.meetingName || getMeetingName(),
+              participants: rec.participants || [],
+              segments: first ? segToSend : [],
+              speaker_events: first ? evToSend : [],
+            }));
+            fd.append('audio', blob, `rec_${rec.chunkSeq || 0}.webm`);
+            const res = await fetch(`${API_BASE}/api/projects`, {method: 'POST', body: fd});
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            projectId = (await res.json()).project_id;
+          } else {
+            fd.append('meta', JSON.stringify({
+              segments: first ? segToSend : [],
+              speaker_events: first ? evToSend : [],
+            }));
+            fd.append('audio', blob, `rec_${rec.chunkSeq || 0}.webm`);
+            const res = await fetch(`${API_BASE}/api/projects/${projectId}/chunks`, {method: 'POST', body: fd});
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          }
+          first = false;
+          await idbDelete(rec.id);   // 送信済みは削除
+          done++;
+        } catch(e) {
+          failed++;
+          logEvent('再送失敗: ' + (e.message || e));
+          break;  // 順序維持のためこのグループは中断、次回起動で再試行
+        }
+      }
+    }
+    if (failed > 0) toast(`再送 ${done}/${total} 件完了（残りは次回起動で再試行）`, 4000);
+    else toast(`未送信の録音 ${done} 件を再送しました`, 3000);
+    logEvent(`起動時再送: 成功${done} 失敗${failed}`);
+  } catch(e) { console.error('recoverUnsentChunks failed:', e); }
+}
+
 async function saveToIDB() {
   try {
     // awaitはトランザクション開始前に全て済ませる
@@ -1600,11 +1919,19 @@ $('btn-clear-project').addEventListener('click', () => {
   state.segments = [];
   state.audioBlob = null;
   state.allAudioBlobs = [];
+  state.speakerEvents = [];
+  state.projectId = null;
+  state.sentSegmentCount = 0;
+  state.sentSpeakerEventCount = 0;
+  state.chunkSeq = 0;
+  state.unsentChunk = false;
+  state.uploadedToVps = false;
+  localStorage.removeItem('active_project_id');
   state.participants = ['', '', '', ''];
   if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
   state.currentSpeaker = null;
   $('rec-timer').textContent = '00:00';
-  $('rec-remaining').textContent = '残り 20:00';
+  $('rec-remaining').textContent = '次の自動保存まで 15:00';
   $('rec-remaining').style.color = 'var(--sub)';
   $('mtg-name-input').value = '';
   renderNameList();
@@ -1619,11 +1946,19 @@ $('btn-new-rec').addEventListener('click', () => {
   state.segments = [];
   state.audioBlob = null;
   state.allAudioBlobs = [];
+  state.speakerEvents = [];
+  state.projectId = null;
+  state.sentSegmentCount = 0;
+  state.sentSpeakerEventCount = 0;
+  state.chunkSeq = 0;
+  state.unsentChunk = false;
+  state.uploadedToVps = false;
+  localStorage.removeItem('active_project_id');
   state.participants = ['', '', '', ''];
   if (state.audioUrl) { URL.revokeObjectURL(state.audioUrl); state.audioUrl = null; }
   state.currentSpeaker = null;
   $('rec-timer').textContent = '00:00';
-  $('rec-remaining').textContent = '残り 20:00';
+  $('rec-remaining').textContent = '次の自動保存まで 15:00';
   $('rec-remaining').style.color = 'var(--sub)';
   renderNameList();
   showScreen('setup');
@@ -1708,6 +2043,21 @@ checkBrowser();
 init();
 purgeExpired();
 renderBitrateSelector();
+recoverUnsentChunks();  // 起動時：未送信チャンクをサーバーへ再送（クラッシュ復旧）
+
+// 背景でタイマーが止まり15分境界を逃した場合、復帰時に即チェック
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!state.isRecording || state.isPaused) return;
+  if (state.startTime && (Date.now() - state.startTime) >= MAX_TOTAL_MS) {
+    finishMeeting();
+    return;
+  }
+  const chunkBase = state.chunkStartTime || state.startTime;
+  if (chunkBase && (Date.now() - chunkBase) >= CHUNK_MS) {
+    rotateAndUploadChunk();
+  }
+});
 
 // ── データロスト防止：ページ離脱警告 ──
 function hasUnsavedData() {

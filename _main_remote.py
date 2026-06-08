@@ -192,6 +192,23 @@ app.add_middleware(
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
+# 音声アップロードの content_type / 拡張子 → 保存拡張子
+_MIME_EXT = {
+    'audio/webm': 'webm', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
+    'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
+    'audio/mp4': 'mp4', 'audio/m4a': 'm4a', 'audio/x-m4a': 'm4a',
+    'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac',
+}
+def _ext_for_upload(upload):
+    mt = (upload.content_type or '').lower()
+    if mt in _MIME_EXT:
+        return _MIME_EXT[mt]
+    fn = (upload.filename or '').lower()
+    for ext in ('webm', 'wav', 'mp3', 'm4a', 'mp4', 'ogg', 'flac'):
+        if fn.endswith('.' + ext):
+            return ext
+    return 'webm'
+
 def require_admin(creds: HTTPBasicCredentials | None = Depends(security)):
     # 認証情報が無い／管理者資格情報が未設定なら 401（WWW-Authenticate は付けない＝
     # ブラウザのネイティブBasicダイアログを出さない。空設定でのバイパスも防ぐ）。
@@ -308,6 +325,86 @@ async def create_project(
         conn.close()
 
     return {'project_id': project_id, 'recordings': len(audio)}
+
+
+# ── 録音チャンク追記（モバイルの15分自動分割アップロード用・無認証） ──
+@app.post('/api/projects/{project_id}/chunks')
+async def append_chunk(
+    project_id: str,
+    meta: str = Form('{}'),
+    audio: list[UploadFile] = [],
+):
+    """
+    既存プロジェクト（同一MTG）へ録音チャンクを追記する。
+    モバイルが録音を止めずに 15 分ごとに送信し、同じ MTG に繋げるための無認証 API。
+    create_project と同じ信頼境界（モバイルは Basic 資格情報を持たない）。
+
+    multipart/form-data:
+      meta  : JSON文字列 { segments:[{text,speakerIdx,ts,highlight}], speaker_events:[...] }
+              ※前回送信以降の「差分」のみをクライアントが送る
+      audio : 音声ファイル（このチャンク分・通常1個）
+
+    recordings / ref_segments / speaker_events の seq は、それぞれ
+    既存の MAX(seq)+1 から連番で追記する（各テーブル独立系列・時系列は ORDER BY seq で担保）。
+    participants は増殖させない（初回作成時のみ）。
+    """
+    try:
+        m = json.loads(meta)
+    except Exception:
+        raise HTTPException(400, 'meta must be valid JSON')
+    segments       = m.get('segments', []) or []
+    speaker_events = m.get('speaker_events', []) or []
+
+    conn = get_conn()
+    try:
+        proj = conn.execute('SELECT id FROM projects WHERE id=?', (project_id,)).fetchone()
+        if not proj:
+            raise HTTPException(404, 'project not found')
+
+        # 各テーブルの seq 継続採番（独立系列）
+        rec_base = conn.execute(
+            'SELECT COALESCE(MAX(seq),-1) AS m FROM recordings WHERE project_id=?', (project_id,)
+        ).fetchone()['m'] + 1
+        seg_base = conn.execute(
+            'SELECT COALESCE(MAX(seq),-1) AS m FROM ref_segments WHERE project_id=?', (project_id,)
+        ).fetchone()['m'] + 1
+        ev_base = conn.execute(
+            'SELECT COALESCE(MAX(seq),-1) AS m FROM speaker_events WHERE project_id=?', (project_id,)
+        ).fetchone()['m'] + 1
+
+        seq = rec_base
+        for f in audio:
+            data = await f.read()
+            if not data:
+                logger.warning(f'append_chunk: empty audio chunk skipped (project={project_id}, filename={f.filename})')
+                continue
+            ext = _ext_for_upload(f)
+            path = os.path.join(AUDIO_DIR, f'{project_id}_{seq}.{ext}')
+            with open(path, 'wb') as fp:
+                fp.write(data)
+            conn.execute(
+                'INSERT INTO recordings(project_id,seq,audio_path,mime,duration,created_at) VALUES(?,?,?,?,?,?)',
+                (project_id, seq, path, f.content_type or f'audio/{ext}', '', now_iso())
+            )
+            seq += 1
+
+        for i, seg in enumerate(segments):
+            conn.execute(
+                'INSERT INTO ref_segments(project_id,seq,text,speaker_idx,ts,highlight) VALUES(?,?,?,?,?,?)',
+                (project_id, seg_base + i, seg.get('text', ''), seg.get('speakerIdx'),
+                 seg.get('ts', ''), int(bool(seg.get('highlight', False))))
+            )
+        for i, ev in enumerate(speaker_events):
+            conn.execute(
+                'INSERT INTO speaker_events(project_id,seq,ts,ms,speaker_idx,speaker_name) VALUES(?,?,?,?,?,?)',
+                (project_id, ev_base + i, ev.get('ts', ''), int(ev.get('ms') or 0),
+                 ev.get('speaker_idx'), ev.get('speaker_name', ''))
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {'project_id': project_id, 'next_seq': seq, 'recordings_added': seq - rec_base}
 
 
 # ── keyterms生成（参加者名 + カタカナ固有名詞） ─────────
