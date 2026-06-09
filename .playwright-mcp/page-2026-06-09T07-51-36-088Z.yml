@@ -1,0 +1,253 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - text: AIボイスメモ
+      - generic [ref=e5]: ユーザーマニュアル — 対面録音とAI文字起こし
+    - link "録音アプリを開く" [ref=e6] [cursor=pointer]:
+      - /url: https://jizo-dev.com/ai-voice-memo-v2/
+  - navigation [ref=e7]:
+    - heading "目次" [level=2] [ref=e8]
+    - list [ref=e9]:
+      - listitem [ref=e10]:
+        - link "このアプリについて" [ref=e11] [cursor=pointer]:
+          - /url: "#about"
+      - listitem [ref=e12]:
+        - link "はじめに（ホーム画面に追加）" [ref=e13] [cursor=pointer]:
+          - /url: "#start"
+      - listitem [ref=e14]:
+        - link "録音する" [ref=e15] [cursor=pointer]:
+          - /url: "#record"
+      - listitem [ref=e16]:
+        - link "録音中の操作" [ref=e17] [cursor=pointer]:
+          - /url: "#during"
+      - listitem [ref=e18]:
+        - link "自動保存と長時間録音" [ref=e19] [cursor=pointer]:
+          - /url: "#autosave"
+      - listitem [ref=e20]:
+        - link "PCで解析・確認する" [ref=e21] [cursor=pointer]:
+          - /url: "#admin"
+      - listitem [ref=e22]:
+        - link "確認・編集・書き出し" [ref=e23] [cursor=pointer]:
+          - /url: "#edit"
+      - listitem [ref=e24]:
+        - link "Zoom録画・音声の取り込み" [ref=e25] [cursor=pointer]:
+          - /url: "#import"
+      - listitem [ref=e26]:
+        - link "困ったときは" [ref=e27] [cursor=pointer]:
+          - /url: "#faq"
+  - main [ref=e28]:
+    - generic [ref=e29]:
+      - heading "01 このアプリについて" [level=2] [ref=e30]:
+        - generic [ref=e31]: "01"
+        - text: このアプリについて
+      - paragraph [ref=e32]: 対面での打ち合わせを、iPhoneで録音し、AIで高精度に文字起こしして、PCで確認するためのアプリです。
+      - paragraph [ref=e33]:
+        - text: 本アプリは
+        - strong [ref=e34]: 二段階方式
+        - text: を採用しています。スマホでは「誰が話したか」を手元で記録しながら録音し、PC側でAIが高精度に文字起こし・整文します。スマホ画面のリアルタイム文字起こしは
+        - strong [ref=e35]: あくまで参考
+        - text: で、確定版はPCで生成されます。
+      - generic [ref=e36]:
+        - generic [ref=e37]:
+          - heading "① スマホで録音" [level=4] [ref=e38]
+          - paragraph [ref=e39]: 音声を録音
+          - paragraph [ref=e40]: 話者ボタンで「誰が話したか」を記録
+          - paragraph [ref=e41]: リアルタイム文字起こしは参考表示
+        - generic [ref=e42]: →
+        - generic [ref=e43]:
+          - heading "② PCで確認" [level=4] [ref=e44]
+          - paragraph [ref=e45]: AIが高精度に文字起こし
+          - paragraph [ref=e46]: 話者ごとに整理・整文
+          - paragraph [ref=e47]: 要約・課題・Q&A・Excel出力
+      - generic [ref=e48]: 必要なもの：iPhone（Safari）と、確認用のPC（ブラウザ）。マイクの使用を許可してください。
+    - generic [ref=e49]:
+      - heading "02 はじめに（ホーム画面に追加）" [level=2] [ref=e50]:
+        - generic [ref=e51]: "02"
+        - text: はじめに（ホーム画面に追加）
+      - paragraph [ref=e52]: iPhoneのSafariでアプリを開き、ホーム画面に追加すると毎回すぐ起動できます。
+      - list [ref=e53]:
+        - listitem [ref=e54]:
+          - text: Safariで
+          - link "https://jizo-dev.com/ai-voice-memo-v2/" [ref=e55] [cursor=pointer]:
+            - /url: https://jizo-dev.com/ai-voice-memo-v2/
+          - text: を開く
+        - listitem [ref=e56]: 共有ボタン（□に↑）から「ホーム画面に追加」を選ぶ
+        - listitem [ref=e57]: 追加されたアイコンから起動する
+        - listitem [ref=e58]: 初回録音時にマイクの使用を「許可」する
+      - generic [ref=e59]:
+        - text: 対応ブラウザ：マイク・リアルタイム文字起こしの都合上、
+        - strong [ref=e60]: iPhoneのSafari
+        - text: での利用を推奨します。非対応ブラウザでは案内画面が表示されます。
+    - generic [ref=e61]:
+      - heading "03 録音する" [level=2] [ref=e62]:
+        - generic [ref=e63]: "03"
+        - text: 録音する
+      - paragraph [ref=e64]: 録音前に、精度を上げるための情報を入力できます（すべて省略可）。
+      - list [ref=e65]:
+        - listitem [ref=e66]:
+          - strong [ref=e67]: MTG名
+          - text: を入力（省略すると日付が自動で付きます）
+        - listitem [ref=e68]:
+          - strong [ref=e69]: 参加者名
+          - text: を入力（最大5名。話者の整理に使われます）
+        - listitem [ref=e70]:
+          - strong [ref=e71]: 専門用語・固有名詞
+          - text: を登録（最大20語。社名・製品名・人名・略語など、誤変換しやすい語を入れると文字起こし精度が上がります）
+        - listitem [ref=e72]:
+          - strong [ref=e73]: 録音品質
+          - text: を選ぶ（通常は「64kbps（推奨）」のままでOK）
+        - listitem [ref=e74]:
+          - strong [ref=e75]: 録音開始
+          - text: を押す
+      - generic [ref=e76]: コツ：参加者名と専門用語を登録しておくと、PC側の文字起こしの誤変換が減ります。固有名詞が多い会議ほど効果があります。
+    - generic [ref=e77]:
+      - heading "04 録音中の操作" [level=2] [ref=e78]:
+        - generic [ref=e79]: "04"
+        - text: 録音中の操作
+      - paragraph [ref=e80]: 録音中は、誰が話しているかを「話者ボタン」で記録します。これがPC側の話者整理の手がかりになります。
+      - table [ref=e81]:
+        - rowgroup [ref=e82]:
+          - row "操作 説明" [ref=e83]:
+            - columnheader "操作" [ref=e84]
+            - columnheader "説明" [ref=e85]
+          - row "話者ボタン 今話している人のボタンを押す。切り替わったら都度押す（手元で確認した最も正確な話者情報になります）" [ref=e86]:
+            - cell "話者ボタン" [ref=e87]
+            - cell "今話している人のボタンを押す。切り替わったら都度押す（手元で確認した最も正確な話者情報になります）" [ref=e88]
+          - row "ハイライト（★） 重要な発言の直前に押すと、その発言に印が付きます" [ref=e89]:
+            - cell "ハイライト（★）" [ref=e90]
+            - cell "重要な発言の直前に押すと、その発言に印が付きます" [ref=e91]
+          - row "一時停止／再開 休憩などで中断。再開すると続きから録音します" [ref=e92]:
+            - cell "一時停止／再開" [ref=e93]
+            - cell "休憩などで中断。再開すると続きから録音します" [ref=e94]
+          - row "保存して完了 録音を終了してPCへアップロードします" [ref=e95]:
+            - cell "保存して完了" [ref=e96]
+            - cell "録音を終了してPCへアップロードします" [ref=e97]
+      - paragraph [ref=e98]: 画面には参考用のリアルタイム文字起こしが表示されます。確定版ではないため、多少の誤りは気にせず会話に集中して構いません。
+      - generic [ref=e99]: 音声が認識されないとき：一定時間文字起こしが反応しないと、画面に確認バナーが出ます。録音自体は続いていることが多いですが、不安な場合は再起動ボタンを押してください。
+    - generic [ref=e100]:
+      - heading "05 自動保存と長時間録音" [level=2] [ref=e101]:
+        - generic [ref=e102]: "05"
+        - text: 自動保存と長時間録音
+      - paragraph [ref=e103]: 長時間でも安心して録音できるよう、自動保存とクラッシュ対策が組み込まれています。
+      - list [ref=e104]:
+        - listitem [ref=e105]:
+          - strong [ref=e106]: 15分ごとに自動アップロード
+          - text: ：録音を止めずに15分ごとに区切って送信します
+        - listitem [ref=e107]:
+          - strong [ref=e108]: 最大60分で自動完了
+          - text: ：60分に達すると自動で完了・送信します
+        - listitem [ref=e109]:
+          - strong [ref=e110]: こまめな自動バックアップ
+          - text: ：万一アプリが落ちても、未送信分は端末内に保存され、次回起動時に自動で再送されます
+      - generic [ref=e111]: 60分を超える会議：いったん「保存して完了」し、同じMTGで再度録音すると続きを追記できます。長い録画ファイルをPCから取り込む場合は、自動的に分割して処理されます。
+      - generic [ref=e112]: 端末内の履歴：スマホ内の録音履歴は約24時間で自動削除されます。確定保存はアップロード後のPC側（サーバー）に残ります。
+    - generic [ref=e113]:
+      - heading "06 PCで解析・確認する" [level=2] [ref=e114]:
+        - generic [ref=e115]: "06"
+        - text: PCで解析・確認する
+      - paragraph [ref=e116]: アップロードした録音は、PCの管理画面で高精度に文字起こし・整理します。
+      - list [ref=e117]:
+        - listitem [ref=e118]:
+          - text: PCのブラウザで
+          - link "管理画面" [ref=e119] [cursor=pointer]:
+            - /url: https://jizo-dev.com/ai-voice-memo-v2/admin/
+          - text: を開きログインする
+        - listitem [ref=e120]: 左の一覧から対象のMTGを選ぶ
+        - listitem [ref=e121]:
+          - strong [ref=e122]: Run1
+          - text: （高精度テキスト）と
+          - strong [ref=e123]: Run2
+          - text: （話者分離）を解析実行する
+        - listitem [ref=e124]:
+          - strong [ref=e125]: LLM最終版を生成
+          - text: を押す（AIが両方を統合し、話者ごとに整文した確定版を作ります）
+      - generic [ref=e126]:
+        - text: Run1とRun2の役割
+        - text: ・
+        - strong [ref=e127]: Run2
+        - text: ：話者の切れ目とタイムラインを担当（誰がいつ話したか）
+        - text: ・
+        - strong [ref=e128]: Run1
+        - text: ：本文テキストの精度を担当
+        - text: ・
+        - strong [ref=e129]: LLM最終版
+        - text: ：この2つを統合し、最も読みやすい確定版にします。
+        - text: ※
+        - strong [ref=e130]: Run2 → Run1 → LLM最終版
+        - text: の順で実行してください。
+    - generic [ref=e131]:
+      - heading "07 確認・編集・書き出し" [level=2] [ref=e132]:
+        - generic [ref=e133]: "07"
+        - text: 確認・編集・書き出し
+      - paragraph [ref=e134]: 生成された確定版（LLM最終版）は、4カラムで見比べながら確認・編集できます。
+      - table [ref=e135]:
+        - rowgroup [ref=e136]:
+          - row "機能 説明" [ref=e137]:
+            - columnheader "機能" [ref=e138]
+            - columnheader "説明" [ref=e139]
+          - row "4カラム比較 「LLM最終版／参考（スマホ）／Run1／Run2」を横並びで確認。差分が分かります" [ref=e140]:
+            - cell "4カラム比較" [ref=e141]
+            - cell "「LLM最終版／参考（スマホ）／Run1／Run2」を横並びで確認。差分が分かります" [ref=e142]
+          - row "話者の修正 話者名のセルをクリックして正しい話者に変更" [ref=e143]:
+            - cell "話者の修正" [ref=e144]
+            - cell "話者名のセルをクリックして正しい話者に変更" [ref=e145]
+          - row "本文の編集 各セルの ▼ メニューから本文を編集・クリア" [ref=e146]:
+            - cell "本文の編集" [ref=e147]
+            - cell "各セルの ▼ メニューから本文を編集・クリア" [ref=e148]
+          - row "要約・残タスク 会議の要約と、やるべきこと（フォローアップ）を自動抽出" [ref=e149]:
+            - cell "要約・残タスク" [ref=e150]
+            - cell "会議の要約と、やるべきこと（フォローアップ）を自動抽出" [ref=e151]
+          - row "Q&A 「この会議で決まったことは？」など、文字起こしに対して質問できます" [ref=e152]:
+            - cell "Q&A" [ref=e153]
+            - cell "「この会議で決まったことは？」など、文字起こしに対して質問できます" [ref=e154]
+          - row "Excelダウンロード 確認画面と同じ内容をExcelに書き出し" [ref=e155]:
+            - cell "Excelダウンロード" [ref=e156]
+            - cell "確認画面と同じ内容をExcelに書き出し" [ref=e157]
+          - row "用語集の編集 「MTG設定」から専門用語を追加・修正し、再解析で反映できます" [ref=e158]:
+            - cell "用語集の編集" [ref=e159]
+            - cell "「MTG設定」から専門用語を追加・修正し、再解析で反映できます" [ref=e160]
+      - generic [ref=e161]: 用途別テンプレート：会議・インタビュー・講義など用途を選ぶと、要約やQ&Aの観点が切り替わります。
+    - generic [ref=e162]:
+      - heading "08 Zoom録画・音声の取り込み" [level=2] [ref=e163]:
+        - generic [ref=e164]: "08"
+        - text: Zoom録画・音声の取り込み
+      - paragraph [ref=e165]: 対面録音だけでなく、Zoomのクラウド録画や手元の音声ファイルも取り込めます。
+      - heading "Zoomクラウド録画から取り込む" [level=3] [ref=e166]
+      - list [ref=e167]:
+        - listitem [ref=e168]: 管理画面で「Zoom録画一覧から取り込み」を開く
+        - listitem [ref=e169]: 取り込みたい録画の「取り込む」を押す（取り込み済みのものは「再取り込み」で別MTGとして再取得できます）
+        - listitem [ref=e170]: 取り込み後、通常どおり Run2 → Run1 → LLM最終版 を実行
+      - heading "音声ファイルをアップロードする" [level=3] [ref=e171]
+      - paragraph [ref=e172]: 他組織が主催した会議など、Zoom連携できない録音は「音声ファイルのアップロード」から取り込めます。長い録音は自動的に分割して処理されます。
+      - generic [ref=e173]: 長い録画について：1本が長い録画は、取り込み時に自動で約20分ごとに分割され、複数の音声として処理されます（つなぎ目で話者の見え方が変わることがあります）。
+    - generic [ref=e174]:
+      - heading "09 困ったときは" [level=2] [ref=e175]:
+        - generic [ref=e176]: "09"
+        - text: 困ったときは
+      - table [ref=e177]:
+        - rowgroup [ref=e178]:
+          - row "症状 対処" [ref=e179]:
+            - columnheader "症状" [ref=e180]
+            - columnheader "対処" [ref=e181]
+          - row "録音画面で文字起こしが出ない 参考表示が止まっても録音は続いていることが多いです。確認バナーの再起動ボタンを試してください。確定版はPC側で生成されます" [ref=e182]:
+            - cell "録音画面で文字起こしが出ない" [ref=e183]
+            - cell "参考表示が止まっても録音は続いていることが多いです。確認バナーの再起動ボタンを試してください。確定版はPC側で生成されます" [ref=e184]
+          - row "マイクが使えない iPhoneの設定 → Safari → マイクの許可を確認。HTTPSのSafariで開いてください" [ref=e185]:
+            - cell "マイクが使えない" [ref=e186]
+            - cell "iPhoneの設定 → Safari → マイクの許可を確認。HTTPSのSafariで開いてください" [ref=e187]
+          - row "アプリが落ちた／閉じた 未送信分は端末内に保存されています。次回アプリを開くと自動で再送されます" [ref=e188]:
+            - cell "アプリが落ちた／閉じた" [ref=e189]
+            - cell "未送信分は端末内に保存されています。次回アプリを開くと自動で再送されます" [ref=e190]
+          - row "話者がうまく分かれない 録音中に話者ボタンを都度押すと精度が上がります。PC側でも話者を手修正できます" [ref=e191]:
+            - cell "話者がうまく分かれない" [ref=e192]
+            - cell "録音中に話者ボタンを都度押すと精度が上がります。PC側でも話者を手修正できます" [ref=e193]
+          - row "固有名詞が誤変換される 専門用語を登録して再解析してください（録音前のスマホ、またはPCのMTG設定）" [ref=e194]:
+            - cell "固有名詞が誤変換される" [ref=e195]
+            - cell "専門用語を登録して再解析してください（録音前のスマホ、またはPCのMTG設定）" [ref=e196]
+  - contentinfo [ref=e197]:
+    - text: "AIボイスメモ ユーザーマニュアル ／ 録音アプリ:"
+    - link "jizo-dev.com/ai-voice-memo-v2" [ref=e198] [cursor=pointer]:
+      - /url: https://jizo-dev.com/ai-voice-memo-v2/
+    - text: "／ 管理画面:"
+    - link "/admin" [ref=e199] [cursor=pointer]:
+      - /url: https://jizo-dev.com/ai-voice-memo-v2/admin/

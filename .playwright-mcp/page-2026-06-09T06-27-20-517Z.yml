@@ -1,0 +1,29 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - heading "管理画面ログイン" [level=2] [ref=e4]
+    - textbox "ID" [ref=e5]
+    - textbox "パスワード" [ref=e6]
+    - button "ログイン" [ref=e8] [cursor=pointer]
+  - banner [ref=e9]:
+    - heading "AIボイスメモ 管理画面（プロトタイプ）" [level=1] [ref=e10]
+    - generic [ref=e11]: MTG一覧
+    - button "＋ 音声から新規" [ref=e12] [cursor=pointer]
+    - link "録音画面へ" [ref=e13] [cursor=pointer]:
+      - /url: /ai-voice-memo-v2/
+    - button "設定" [ref=e14] [cursor=pointer]
+    - generic "ファイル更新ごとに加算" [ref=e15]: v2.6
+  - generic [ref=e16]:
+    - complementary [ref=e17]:
+      - generic [ref=e18]:
+        - heading "MTG一覧" [level=2] [ref=e19]
+        - button "更新" [ref=e20] [cursor=pointer]
+      - link "＋ 新規MTGを録音" [ref=e22] [cursor=pointer]:
+        - /url: /ai-voice-memo-v2/
+      - generic [ref=e23]:
+        - button "Zoom録画一覧から取り込み" [ref=e24] [cursor=pointer]
+        - button "音声ファイルのアップロード" [ref=e25] [cursor=pointer]
+      - paragraph [ref=e27]: 読み込み中…
+    - main [ref=e28]:
+      - generic [ref=e29]:
+        - generic [ref=e30]: —
+        - generic [ref=e31]: MTGを選択してください

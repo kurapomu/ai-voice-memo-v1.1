@@ -1,0 +1,48 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - heading "AIボイスメモ" [level=1] [ref=e4]
+    - generic [ref=e5]:
+      - link "管理画面" [ref=e6] [cursor=pointer]:
+        - /url: /ai-voice-memo-v2/admin/
+      - button "QR" [ref=e7] [cursor=pointer]
+      - button "設定" [ref=e8] [cursor=pointer]
+  - generic [ref=e9]:
+    - heading "MTG名（省略可）" [level=2] [ref=e10]
+    - textbox "例：週次定例 / 省略すると「MTG 2026-05-31」" [ref=e11]
+    - heading "参加者名を入力（省略可）" [level=2] [ref=e12]
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - textbox "参加者 1" [ref=e15]
+        - button "×" [ref=e16] [cursor=pointer]
+      - generic [ref=e17]:
+        - textbox "参加者 2" [ref=e18]
+        - button "×" [ref=e19] [cursor=pointer]
+      - generic [ref=e20]:
+        - textbox "参加者 3" [ref=e21]
+        - button "×" [ref=e22] [cursor=pointer]
+      - generic [ref=e23]:
+        - textbox "参加者 4" [ref=e24]
+        - button "×" [ref=e25] [cursor=pointer]
+    - button "＋ 参加者を追加" [ref=e26] [cursor=pointer]
+    - heading "専門用語・固有名詞（省略可）" [level=2] [ref=e27]
+    - generic [ref=e28]: 社名・製品名・人名・略語など、誤変換しやすい語を登録すると文字起こし精度が上がります（最大20語）
+    - button "＋ 用語を追加" [ref=e29] [cursor=pointer]
+    - heading "録音品質（ビットレート）" [level=2] [ref=e30]
+    - generic [ref=e31]:
+      - button "32kbps" [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]: 32kbps
+      - button "64kbps ★推奨" [ref=e34] [cursor=pointer]:
+        - generic [ref=e35]: 64kbps
+        - generic [ref=e36]: ★推奨
+      - button "96kbps 過剰" [ref=e37] [cursor=pointer]:
+        - generic [ref=e38]: 96kbps
+        - generic [ref=e39]: 過剰
+      - button "128kbps 過剰" [ref=e40] [cursor=pointer]:
+        - generic [ref=e41]: 128kbps
+        - generic [ref=e42]: 過剰
+    - generic [ref=e43]:
+      - text: "現在:"
+      - strong [ref=e44]: 64kbps
+      - text: （推奨・VoIP品質）
+      - text: ※次の録音から反映 / 文字起こし精度は64kbpsで頭打ち。96・128kbpsは容量だけ増えてASR精度は変わりません
+  - button "録音開始" [ref=e46] [cursor=pointer]

@@ -1,0 +1,2 @@
+[     238ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ https://jizo-dev.com/ai-voice-memo-v2/:0
+[     255ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ https://jizo-dev.com/favicon.ico:0
